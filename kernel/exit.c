@@ -76,6 +76,8 @@
 
 #include "exit.h"
 
+#include <linux/cx_kern_funcs.h>
+
 /*
  * The default value should be high enough to not crash a system that randomly
  * crashes its kernel from time to time, but low enough to at least not permit
@@ -846,6 +848,11 @@ void __noreturn do_exit(long code)
 			setmax_mm_hiwater_rss(&tsk->signal->maxrss, tsk->mm);
 	}
 	acct_collect(code, group_dead);
+
+	if (tsk->cx_permission && group_dead) {
+		exit_cx(tsk);
+	}
+
 	if (group_dead)
 		tty_audit_exit();
 	audit_free(tsk);

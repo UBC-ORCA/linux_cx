@@ -14,6 +14,8 @@
 #include <asm/ptrace.h>
 #include <asm/csr.h>
 
+#include <linux/cx_kern_funcs.h>
+
 #ifdef CONFIG_FPU
 extern void __fstate_save(struct task_struct *save_to);
 extern void __fstate_restore(struct task_struct *restore_from);
@@ -72,6 +74,16 @@ static __always_inline bool has_fpu(void) { return false; }
 
 extern struct task_struct *__switch_to(struct task_struct *,
 				       struct task_struct *);
+
+static inline void __switch_to_cxu(struct task_struct *__prev, struct task_struct *__next) {
+	if (__prev->cx_permission != NULL) {
+		cx_context_save(__prev);
+	}
+
+	if (__next->cx_permission != NULL) {
+		cx_context_restore(__next);
+	}
+}
 
 #define switch_to(prev, next, last)			\
 do {							\

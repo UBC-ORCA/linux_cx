@@ -32,6 +32,9 @@
 #include <asm/vector.h>
 #include <asm/irq_stack.h>
 
+#include <linux/cx_kern_funcs.h>
+#include "../../../../include/utils.h"
+
 int show_unhandled_signals = 1;
 
 static DEFINE_SPINLOCK(die_lock);
@@ -170,6 +173,14 @@ asmlinkage __visible __trap_section void do_trap_insn_illegal(struct pt_regs *re
 {
 	bool handled;
 
+	u32 insn = (u32)regs->badaddr;
+	uint opc = insn & ((1<<7)-1);
+
+	if (opc == CX_REG_TYPE || opc == CX_IMM_TYPE || opc == CX_FLEX_TYPE) {
+		do_trap_first_cx_use(regs);
+		return;
+	}
+
 	if (user_mode(regs)) {
 		irqentry_enter_from_user_mode(regs);
 
@@ -192,6 +203,17 @@ asmlinkage __visible __trap_section void do_trap_insn_illegal(struct pt_regs *re
 
 		irqentry_nmi_exit(regs, state);
 	}
+}
+
+asmlinkage __visible __trap_section void do_trap_first_cx_use(struct pt_regs *regs)
+{
+	regs->orig_a0 = regs->a0;
+
+	riscv_v_vstate_discard(regs);
+
+	cx_first_use();
+
+	syscall_exit_to_user_mode(regs);
 }
 
 DO_ERROR_INFO(do_trap_load_fault,

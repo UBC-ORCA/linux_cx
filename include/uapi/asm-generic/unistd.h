@@ -828,9 +828,13 @@ __SYSCALL(__NR_futex_wake, sys_futex_wake)
 __SYSCALL(__NR_futex_wait, sys_futex_wait)
 #define __NR_futex_requeue 456
 __SYSCALL(__NR_futex_requeue, sys_futex_requeue)
+#define __NR_cx_open 457
+__SYSCALL(__NR_cx_open, sys_cx_open)
+#define __NR_cx_close 458
+__SYSCALL(__NR_cx_close, sys_cx_close)
 
 #undef __NR_syscalls
-#define __NR_syscalls 457
+#define __NR_syscalls 459
 
 /*
  * 32 bit systems traditionally used different

@@ -39,6 +39,8 @@
 #include <linux/livepatch_sched.h>
 #include <asm/kmap_size.h>
 
+#include <linux/cx_kernel_structs.h>
+
 /* task_struct member predeclarations (sorted alphabetically): */
 struct audit_context;
 struct bio_list;
@@ -1543,6 +1545,12 @@ struct task_struct {
 #ifdef CONFIG_USER_EVENTS
 	struct user_event_mm		*user_event_mm;
 #endif
+
+
+	cxu_t *cxu_data;
+	u32   *cx_permission;
+	u32   cx_index;
+	u32   cx_status;
 
 	/*
 	 * New fields for task_struct should be added above here, so that

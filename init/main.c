@@ -111,6 +111,8 @@
 
 #include <kunit/test.h>
 
+#include <linux/cx_kern_funcs.h>
+
 static int kernel_init(void *);
 
 /*
@@ -1465,6 +1467,7 @@ static int __ref kernel_init(void *unused)
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
+		cx_init();
 		if (!ret)
 			return 0;
 		pr_err("Failed to execute %s (error %d)\n",

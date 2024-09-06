@@ -15,6 +15,9 @@
 
 #include <linux/uaccess.h>
 
+#include <linux/cx_kernel_structs.h>
+
+
 static struct signal_struct init_signals = {
 	.nr_threads	= 1,
 	.thread_head	= LIST_HEAD_INIT(init_task.thread_node),
@@ -210,8 +213,17 @@ struct task_struct init_task
 #ifdef CONFIG_SECCOMP_FILTER
 	.seccomp	= { .filter_count = ATOMIC_INIT(0) },
 #endif
+	.cxu_data = NULL,
+	.cx_permission = NULL,
+	.cx_index = 0,
+	.cx_status = 0,
+
 };
 EXPORT_SYMBOL(init_task);
+
+cxu_info_t cxu[NUM_CXUS];
+EXPORT_SYMBOL(cxu);
+
 
 /*
  * Initial thread structure. Alignment of this is handled by a special
