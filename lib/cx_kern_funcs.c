@@ -42,6 +42,30 @@ static inline int get_free_state(cxu_id_t cxu_id) {
     return -1;
 }
 
+static int get_free_vstate(cxu_id_t cxu_id, cx_state_id_t state_id) {
+    for (int i = 0; i < 4; i++) {
+        if (current->cxu_data[cxu_id].state[state_id].v_id[i] < 0xFFFFFFFF) {
+            for (int j = 0; j < 32; j++) {
+                uint bit = GET_BITS(current->cxu_data[cxu_id].state[state_id].v_id[i], j, 1);
+                if (!bit) {
+                    current->cxu_data[cxu_id].state[state_id].v_id[i] |= 1 << j;
+                    return i * 32 + j;
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+static bool is_vstate_free(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id) {
+    for (int i = 0; i < 4; i++) {
+        if (tsk->cxu_data[cxu_id].state[state_id].v_id[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void set_cx_en_csrs(void) {
     // Can't just use a for loop (without some kind of fancy macros) - need to be explicit
     csr_write(MCX_ENABLE0, 0xFFFFFFFF);
@@ -73,14 +97,14 @@ static void clear_cx_en_csrs(void) {
 }
 
 void save_cx_en_csrs(struct task_struct *tsk) {
-    tsk->cx_permission[0] = csr_read(MCX_ENABLE0);
-    tsk->cx_permission[1] = csr_read(MCX_ENABLE1);
-    tsk->cx_permission[2] = csr_read(MCX_ENABLE2);
-    tsk->cx_permission[3] = csr_read(MCX_ENABLE3);
-    // tsk->cx_permission[4] = csr_read(MCX_ENABLE4);
-    // tsk->cx_permission[5] = csr_read(MCX_ENABLE5);
-    // tsk->cx_permission[6] = csr_read(MCX_ENABLE6);
-    // tsk->cx_permission[7] = csr_read(MCX_ENABLE7);
+    tsk->cx_permission[0] = cx_csr_read(MCX_ENABLE0);
+    tsk->cx_permission[1] = cx_csr_read(MCX_ENABLE1);
+    tsk->cx_permission[2] = cx_csr_read(MCX_ENABLE2);
+    tsk->cx_permission[3] = cx_csr_read(MCX_ENABLE3);
+    tsk->cx_permission[4] = cx_csr_read(MCX_ENABLE4);
+    tsk->cx_permission[5] = cx_csr_read(MCX_ENABLE5);
+    tsk->cx_permission[6] = cx_csr_read(MCX_ENABLE6);
+    tsk->cx_permission[7] = cx_csr_read(MCX_ENABLE7);
 }
 
 void restore_cx_en_csrs(struct task_struct *tsk) {
@@ -88,10 +112,16 @@ void restore_cx_en_csrs(struct task_struct *tsk) {
     csr_write(MCX_ENABLE1, tsk->cx_permission[1]);
     csr_write(MCX_ENABLE2, tsk->cx_permission[2]);
     csr_write(MCX_ENABLE3, tsk->cx_permission[3]);
-    // csr_write(MCX_ENABLE4, tsk->cx_permission[4]);
-    // csr_write(MCX_ENABLE5, tsk->cx_permission[5]);
-    // csr_write(MCX_ENABLE6, tsk->cx_permission[6]);
-    // csr_write(MCX_ENABLE7, tsk->cx_permission[7]);
+    csr_write(MCX_ENABLE4, tsk->cx_permission[4]);
+    csr_write(MCX_ENABLE5, tsk->cx_permission[5]);
+    csr_write(MCX_ENABLE6, tsk->cx_permission[6]);
+    csr_write(MCX_ENABLE7, tsk->cx_permission[7]);
+}
+
+static void free_vstate(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id) {
+    for (int i = 0; i < 4; i++) {
+        tsk->cxu_data[cxu_id].state[state_id].v_id[i] = 0;
+    }
 }
 
 void cx_init(void)
@@ -116,11 +146,13 @@ void cx_init(void)
             cxu[i].state_info[j].virt = -1;
         }
     }
-    // clear_cx_en_csrs();
+
+    cx_csr_write( CX_INDEX, CX_LEGACY );
+    cx_csr_write( CX_STATUS, 0 );
 }
 
-static void cx_alloc_process_structs(struct task_struct *tsk) {
-    tsk->cxu_data = kmalloc(sizeof(cxu_t) * MAX_NUM_CXUS, GFP_KERNEL);
+void cx_alloc_process_structs(struct task_struct *tsk) {
+    tsk->cxu_data = kzalloc(sizeof(cxu_t) * MAX_NUM_CXUS, GFP_KERNEL);
     if (tsk->cxu_data == NULL) {
         pr_info("kmalloc failed for cxu_data\n");
     }
@@ -132,7 +164,10 @@ static void cx_alloc_process_structs(struct task_struct *tsk) {
 
     for (int i = 0; i < NUM_CXUS; i++) {
         for (int j = 0; j < MAX_NUM_STATES; j++) {
-            tsk->cxu_data[i].state[j].v_state.data = NULL;
+            tsk->cxu_data[i].state[j].v_state.data = NULL; //kzalloc(sizeof(uint) * MAX_NUM_STATES, GFP_KERNEL);
+            for (int k = 0; k < 4; k++) {
+                tsk->cxu_data[i].state[j].v_id[k] = 0;
+            }
         }
     }
 
@@ -203,20 +238,13 @@ static uint get_mcx_enable_bit(cxu_id_t cxu_id, cx_state_id_t state_id) {
     return mcx_enable;
 }
 
-static int save_ctx_to_process(cx_virt_data_t *v_state) {
-
+static int save_ctx_to_process(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id) {
     cx_stctxs_t state_ctx_status = {.idx = CX_READ_STATUS()};
 
-    if (v_state->data == NULL) {
-        v_state->data = kzalloc(sizeof(uint) * MAX_STATE_SIZE, GFP_KERNEL);
-    }
-
-    v_state->status = state_ctx_status.idx;
-
+    tsk->cxu_data[cxu_id].state[state_id].v_state.status = state_ctx_status.idx;
     for (int i = 0; i < state_ctx_status.sel.state_size; i++) {
-        v_state->data[i] = CX_READ_STATE(i);
-    }
-    
+        tsk->cxu_data[cxu_id].state[state_id].v_state.data[i] = CX_READ_STATE(i);
+    }    
     return 0;
 }
 
@@ -224,7 +252,7 @@ static void restore_ctx_to_process(cx_virt_data_t *virt_data) {
     cx_stctxs_t state_ctx_status = {.idx = virt_data->status};
     int size = state_ctx_status.sel.state_size;
     // TODO: This is not robust, and it's quite possible that we're not 0'ing values from 
-    // the previous state. 
+    // the previous state.
     for (int i = 0; i < size; i++) {
         CX_WRITE_STATE(i, virt_data->data[i]);
     }
@@ -234,28 +262,45 @@ static void restore_ctx_to_process(cx_virt_data_t *virt_data) {
 
 void cx_context_save(struct task_struct *tsk) {
     tsk->cx_index = csr_read(CX_INDEX);
-    tsk->cx_status = csr_read(CX_STATUS);
+    // tsk->cx_status = csr_read(CX_STATUS);
     save_cx_en_csrs(tsk);
     for (int i = 0; i < 8; i++) {
         uint mcx_enable = tsk->cx_permission[i];
         for (int j = 0; j < 32; j++) {
-            uint en = GET_BITS(mcx_enable, j, 1);
-            if (en) {
+            cxu_id_t cxu_id = j / 16 + i * 2;
+            cx_state_id_t state_id = j % 16;
+            uint vid_clear = is_vstate_free(tsk, cxu_id, state_id);
+            uint trap = GET_BITS(mcx_enable, j, 1);
+            if (!trap && !vid_clear) {
                 // 262kB
-                cxu_id_t cxu_id = i / 2;
-                cx_state_id_t state_id = j % 16;
                 cx_sel_t cx_sel = gen_cx_sel(cxu_id, state_id, 0);
                 cx_csr_write(CX_INDEX, cx_sel);
-                save_ctx_to_process(&tsk->cxu_data[cxu_id].state[state_id].v_state);
+                save_ctx_to_process(tsk, cxu_id, state_id);
             }
         }
     }
 }
 
 void cx_context_restore(struct task_struct *tsk) {
-    csr_write(CX_INDEX, tsk->cx_index);
-    csr_write(CX_STATUS, tsk->cx_status);
     restore_cx_en_csrs(tsk);
+    for (int i = 0; i < 8; i++) {
+        uint mcx_enable = tsk->cx_permission[i];
+        for (int j = 0; j < 32; j++) {
+            uint trap = GET_BITS(mcx_enable, j, 1);
+            cxu_id_t cxu_id = j / 16 + i * 2;
+            cx_state_id_t state_id = j % 16;
+            uint vid_clear = is_vstate_free(tsk, cxu_id, state_id);
+
+            if (!trap && !vid_clear) {
+                // 262kB
+                cx_sel_t cx_sel = gen_cx_sel(cxu_id, state_id, 0);
+                cx_csr_write(CX_INDEX, cx_sel);
+                restore_ctx_to_process(&tsk->cxu_data[cxu_id].state[state_id].v_state);
+            }
+        }
+    }
+    csr_write(CX_INDEX, tsk->cx_index);
+    // csr_write(CX_STATUS, tsk->cx_status);
 }
 
 static inline bool is_valid_state_id(cxu_id_t cxu_id, cx_state_id_t state_id) {
@@ -265,18 +310,13 @@ static inline bool is_valid_state_id(cxu_id_t cxu_id, cx_state_id_t state_id) {
     return false;
 }
 
-// static inline void add_active_pid(cxu_id_t cxu_id, cx_state_id_t state_id) {
-//     val_t *p = kmalloc(sizeof(val_t), GFP_KERNEL);
-//     p->val = current->pid;
-//     list_add_tail(&p->list, &cxu[cxu_id].state_info[state_id].pids);
-// }
-
 static int try_alloc_state(cxu_id_t cxu_id, cx_virt_t cx_virt) {
     cx_state_id_t state_id = get_free_state(cxu_id);
     if (is_valid_state_id(cxu_id, state_id)) {
         cxu[cxu_id].state_info[state_id].virt = cx_virt;
         // add_active_pid(cxu_id, state_id);
     }
+    current->cxu_data[cxu_id].state[state_id].v_state.data = kzalloc(sizeof(uint) * MAX_STATE_SIZE, GFP_KERNEL);
     return state_id;
 }
 
@@ -285,16 +325,17 @@ static void free_state(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t s
     state->val = state_id;
     list_add(&state->list, &cxu[cxu_id].free_states);
     cxu[cxu_id].state_info[state_id].virt = -1;
-    
+
     if (tsk->cxu_data[cxu_id].state[state_id].v_state.data != NULL) {
         kfree(tsk->cxu_data[cxu_id].state[state_id].v_state.data);
         tsk->cxu_data[cxu_id].state[state_id].v_state.data = NULL;
+    } else {
+        pr_info("not null? in what world\n");
     }
-    tsk->cxu_data[cxu_id].state[state_id].v_state.status = 0;
+    tsk->cxu_data[cxu_id].state[state_id].v_state.status = -1;
 }
 
 static int init_state(void) {
-
     // This will trigger HW to write its initial status, if configured in HW.
     CX_WRITE_STATUS(CX_INITIAL);
 
@@ -323,35 +364,40 @@ int cx_close(struct task_struct *tsk, int cx_sel) {
 
     // Don't need to do anything for stateless CXs
     if (cxu[cxu_id].num_states == 0) {
-        pr_info("Stateless close\n");
         return 0;
     }
 
     uint en = CX_GET_ENABLE(cx_sel);
     if (!en) {
-        pr_info("Enable bit not set in cx_sel\n");
         return 0;
     }
 
     // Stateful CXs
     cx_state_id_t state_id = CX_GET_STATE_ID(cx_sel);
-    cx_vstate_id_t vstate_id = CX_GET_VIRT_STATE_ID(cx_sel);
 
     // Trapping when bit is set high (not enabled in the task)
     // Not trapping when bit is low (enabled in task)
     uint mcx_enable_bit = get_mcx_enable_bit(cxu_id, state_id);
     if (mcx_enable_bit) {
-        pr_info("Not enabled in task\n");
         return 0;
     }
 
     // Now, check to see if we actually have an opened context, and free
     // up the data if we do
     if (cxu[cxu_id].state_info[state_id].counter <= 0) {
-        pr_info("Closing a state that's already closed!\n");
+        pr_info("We shouldn't be here - closing a state that shouldn't be closed\n");
         return 0;
     }
 
+    cx_vstate_id_t vstate_id = CX_GET_VIRT_STATE_ID(cx_sel);
+
+    // Free the virtual state id
+    tsk->cxu_data[cxu_id].state[state_id].v_id[vstate_id / 32] &= ~(1 << (vstate_id % 32));
+
+    if (!is_vstate_free(tsk, cxu_id, state_id)) {
+        return 0;
+    }
+    
     cxu[cxu_id].state_info[state_id].counter--;
 
     // Update the freelist
@@ -418,40 +464,63 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
             pr_info("Undefined virt type\n");
             return -1;
         }
-        if (state_id >= 0) {
-            // do we need this?
-        }
         if (state_id < 0) {
+            pr_info("state id less than 0\n");
             return -1;
         }
-
+        uint vstate = get_free_vstate(cxu_id, state_id);
         // Save the old cx_index and reset the CXU state for the new index
-        cx_sel_t cx_index = gen_cx_sel(cxu_id, state_id, 0);
+        cx_sel_t cx_index = gen_cx_sel(cxu_id, state_id, vstate);
         cx_sel_t prev_sel_index = csr_read(CX_INDEX);
-        if (prev_sel_index > 1023 || prev_sel_index < 0) {
-            return -1;
-        }
 
         csr_write( CX_INDEX, cx_index );
 
         int retval = init_state();
 
         if (retval == -1) {
+            pr_info("Init state issue\n");
             return -1;
         }
         
         // Counting how many processes are using this state context
         cxu[cxu_id].state_info[state_id].counter += 1;
         csr_write(CX_INDEX, prev_sel_index);
-
         return cx_index;
     }
 }
 
+int cx_copy_process_data(struct task_struct *new) {
+    current->cx_index = cx_csr_read(CX_INDEX);
+    for (int i = 0; i < 8; i++) {
+        new->cx_permission[i] = current->cx_permission[i];
+    }
+    for (int i = 0; i < MAX_NUM_CXUS; i++) {
+        for (int j = 0; j < MAX_NUM_STATES; j++) {
+            if (current->cxu_data[i].state[j].v_state.data != NULL) {
+                new->cxu_data[i].state[j].v_state.data = kzalloc(sizeof(uint) * MAX_STATE_SIZE, GFP_KERNEL);
+                cxu[i].state_info[j].counter += 1;
+                
+                cx_sel_t cx_sel = gen_cx_sel(i, j, 0);
+                cx_csr_write(CX_INDEX, cx_sel);
+                save_ctx_to_process(new, i, j);
+                for (int k = 0; k < 4; k++) {
+                    new->cxu_data[i].state[j].v_id[k] = current->cxu_data[i].state[j].v_id[k];
+                }
+            }
+        }
+    }
+    cx_csr_write(CX_INDEX, current->cx_index);
+
+    // TODO: Downgrade the selectors from exclusive to shared
+    return 0;
+}
+
 // We should check to make sure that the active selector is valid. 
 void cx_first_use(void) {
-    if (current->cxu_data == NULL) {
-        pr_info("CX not active for this proces\n");
+    if (current->cxu_data == NULL || current->cx_permission == NULL) {
+        pr_info("CX not active for this process\n");
+        pr_info("Active cx_index: %08x\n", cx_csr_read(CX_INDEX));
+        pr_info("Active Process: %d\n", current->pid);
         BUG_ON(true);
         return;
     }
@@ -486,20 +555,25 @@ void cx_first_use(void) {
 }
 
 void exit_cx(struct task_struct *tsk) {
-
 	// Free state
 	if (tsk->cxu_data) {
 		for (int i = 0; i < 8; i++) {
             uint mcx_enable = tsk->cx_permission[i];
             for (int j = 0; j < 32; j++) {
+                cx_state_id_t state_id = j % MAX_NUM_STATES;
+                // 2 CXUs per CSR
+                // 16 states per CXU
+                cxu_id_t      cxu_id = i * 2 + j / MAX_NUM_STATES;
+                uint vid_clear = is_vstate_free(tsk, cxu_id, state_id);
                 uint mcx_enable_bit = GET_BITS(mcx_enable, j, 1);
-                if (!mcx_enable_bit) {
-                    cx_state_id_t state_id = j % MAX_NUM_STATES;
-                    // 2 CXUs per CSR
-                    // 16 states per CXU
-                    cxu_id_t      cxu_id = i * 2 + j / MAX_NUM_STATES;
-                    // vstate is ignored in this function
-                    cx_close(tsk, gen_cx_sel(cxu_id, state_id, 0));
+                int counter = cxu[cxu_id].state_info[state_id].counter;
+
+                if (!mcx_enable_bit && !vid_clear) {
+                    free_vstate(tsk, cxu_id, state_id);
+                    cxu[cxu_id].state_info[state_id].counter--;
+                    if (cxu[cxu_id].state_info[state_id].counter == 0) {
+                        free_state(tsk, cxu_id, state_id);
+                    }
                 }
             }
         }
@@ -510,8 +584,8 @@ void exit_cx(struct task_struct *tsk) {
 		tsk->cx_permission = NULL;
 	}
 
-    set_cx_en_csrs();
-    csr_write(CX_INDEX, 0);
-    csr_write(CX_STATUS, 0);
-    
+    if (tsk->cxu_data) {
+		kfree(tsk->cxu_data);
+		tsk->cxu_data = NULL;
+	}
 }

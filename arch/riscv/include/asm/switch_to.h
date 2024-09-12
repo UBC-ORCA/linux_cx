@@ -93,6 +93,7 @@ do {							\
 		__switch_to_fpu(__prev, __next);	\
 	if (has_vector())					\
 		__switch_to_vector(__prev, __next);	\
+	__switch_to_cxu(__prev, __next); \
 	((last) = __switch_to(__prev, __next));		\
 } while (0)
 

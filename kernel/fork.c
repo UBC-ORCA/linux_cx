@@ -111,6 +111,8 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/task.h>
 
+#include <linux/cx_kern_funcs.h>
+
 /*
  * Minimum number of threads to boot the kernel
  */
@@ -2429,6 +2431,23 @@ __latent_entropy struct task_struct *copy_process(
 		if (!set_kthread_struct(p))
 			goto bad_fork_cleanup_delayacct;
 	}
+
+	p->cx_index = cx_csr_read(CX_INDEX); // current->cx_index; ? 
+	p->cx_status = cx_csr_read(CX_STATUS);
+	// We only want to create a new mcx_table, etc. if we have a new process.
+	// if we have a new thread, we want to copy the parent structs.
+	if (current->cx_permission && !(clone_flags & CLONE_THREAD)) {
+		cx_alloc_process_structs(p);
+		retval = cx_copy_process_data(p);
+		if (retval < 0) {
+			exit_cx(p);
+			goto bad_fork_cleanup_delayacct;
+		}
+	} else {
+		p->cx_permission = current->cx_permission;
+		p->cxu_data = current->cxu_data;
+	}
+
 #ifdef CONFIG_NUMA
 	p->mempolicy = mpol_dup(p->mempolicy);
 	if (IS_ERR(p->mempolicy)) {
