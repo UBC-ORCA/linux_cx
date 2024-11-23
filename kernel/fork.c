@@ -2432,7 +2432,7 @@ __latent_entropy struct task_struct *copy_process(
 			goto bad_fork_cleanup_delayacct;
 	}
 
-	p->cx_index = cx_csr_read(CX_INDEX); // current->cx_index; ? 
+	p->ucx_sel = cx_csr_read(CX_SELECTOR_USER); // current->cx_index; ? 
 	p->cx_status = cx_csr_read(CX_STATUS);
 	// We only want to create a new mcx_table, etc. if we have a new process.
 	// if we have a new thread, we want to copy the parent structs.

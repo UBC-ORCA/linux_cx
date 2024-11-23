@@ -1549,7 +1549,7 @@ struct task_struct {
 
 	cxu_t *cxu_data;
 	u32   *cx_permission;
-	u32   cx_index;
+	u32   ucx_sel;
 	u32   cx_status;
 
 	/*

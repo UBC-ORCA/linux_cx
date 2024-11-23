@@ -147,7 +147,7 @@ void cx_init(void)
         }
     }
 
-    cx_csr_write( CX_INDEX, CX_LEGACY );
+    cx_csr_write( CX_SELECTOR_USER, CX_LEGACY );
     cx_csr_write( CX_STATUS, 0 );
 }
 
@@ -261,7 +261,7 @@ static void restore_ctx_to_process(cx_virt_data_t *virt_data) {
 }
 
 void cx_context_save(struct task_struct *tsk) {
-    tsk->cx_index = csr_read(CX_INDEX);
+    tsk->ucx_sel = csr_read(CX_SELECTOR_USER);
     // tsk->cx_status = csr_read(CX_STATUS);
     save_cx_en_csrs(tsk);
     for (int i = 0; i < 8; i++) {
@@ -274,7 +274,7 @@ void cx_context_save(struct task_struct *tsk) {
             if (!trap && !vid_clear) {
                 // 262kB
                 cx_sel_t cx_sel = gen_cx_sel(cxu_id, state_id, 0);
-                cx_csr_write(CX_INDEX, cx_sel);
+                cx_csr_write(CX_SELECTOR_USER, cx_sel);
                 save_ctx_to_process(tsk, cxu_id, state_id);
             }
         }
@@ -294,12 +294,12 @@ void cx_context_restore(struct task_struct *tsk) {
             if (!trap && !vid_clear) {
                 // 262kB
                 cx_sel_t cx_sel = gen_cx_sel(cxu_id, state_id, 0);
-                cx_csr_write(CX_INDEX, cx_sel);
+                cx_csr_write(CX_SELECTOR_USER, cx_sel);
                 restore_ctx_to_process(&tsk->cxu_data[cxu_id].state[state_id].v_state);
             }
         }
     }
-    csr_write(CX_INDEX, tsk->cx_index);
+    csr_write(CX_SELECTOR_USER, tsk->ucx_sel);
     // csr_write(CX_STATUS, tsk->cx_status);
 }
 
@@ -469,11 +469,11 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
             return -1;
         }
         uint vstate = get_free_vstate(cxu_id, state_id);
-        // Save the old cx_index and reset the CXU state for the new index
-        cx_sel_t cx_index = gen_cx_sel(cxu_id, state_id, vstate);
-        cx_sel_t prev_sel_index = csr_read(CX_INDEX);
+        // Save the old sel and reset the CXU state for the new index
+        cx_sel_t sel = gen_cx_sel(cxu_id, state_id, vstate);
+        cx_sel_t prev_sel_index = csr_read(CX_SELECTOR_USER);
 
-        csr_write( CX_INDEX, cx_index );
+        csr_write( CX_SELECTOR_USER, sel );
 
         int retval = init_state();
 
@@ -484,13 +484,13 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
         
         // Counting how many processes are using this state context
         cxu[cxu_id].state_info[state_id].counter += 1;
-        csr_write(CX_INDEX, prev_sel_index);
-        return cx_index;
+        csr_write(CX_SELECTOR_USER, prev_sel_index);
+        return sel;
     }
 }
 
 int cx_copy_process_data(struct task_struct *new) {
-    current->cx_index = cx_csr_read(CX_INDEX);
+    current->ucx_sel = cx_csr_read(CX_SELECTOR_USER);
     for (int i = 0; i < 8; i++) {
         new->cx_permission[i] = current->cx_permission[i];
     }
@@ -501,7 +501,7 @@ int cx_copy_process_data(struct task_struct *new) {
                 cxu[i].state_info[j].counter += 1;
                 
                 cx_sel_t cx_sel = gen_cx_sel(i, j, 0);
-                cx_csr_write(CX_INDEX, cx_sel);
+                cx_csr_write(CX_SELECTOR_USER, cx_sel);
                 save_ctx_to_process(new, i, j);
                 for (int k = 0; k < 4; k++) {
                     new->cxu_data[i].state[j].v_id[k] = current->cxu_data[i].state[j].v_id[k];
@@ -509,7 +509,7 @@ int cx_copy_process_data(struct task_struct *new) {
             }
         }
     }
-    cx_csr_write(CX_INDEX, current->cx_index);
+    cx_csr_write(CX_SELECTOR_USER, current->ucx_sel);
 
     // TODO: Downgrade the selectors from exclusive to shared
     return 0;
@@ -519,14 +519,14 @@ int cx_copy_process_data(struct task_struct *new) {
 void cx_first_use(void) {
     if (current->cxu_data == NULL || current->cx_permission == NULL) {
         pr_info("CX not active for this process\n");
-        pr_info("Active cx_index: %08x\n", cx_csr_read(CX_INDEX));
+        pr_info("Active cx_sel: %08x\n", cx_csr_read(CX_SELECTOR_USER));
         pr_info("Active Process: %d\n", current->pid);
         BUG_ON(true);
         return;
     }
 
     // Save the current state index
-    cx_index_t prev_cx_idx = csr_read(CX_INDEX);
+    cx_select_t prev_cx_idx = csr_read(CX_SELECTOR_USER);
     cxu_id_t cxu_id = CX_GET_CXU_ID(prev_cx_idx);
     cx_state_id_t state_id = CX_GET_STATE_ID(prev_cx_idx);
     // set the trap bit to 0
@@ -551,7 +551,7 @@ void cx_first_use(void) {
     //     // initialize this new state;
     //     init_state();
     // }
-    // csr_write(CX_INDEX, prev_cx_idx);
+    // csr_write(CX_SELECTOR_USER, prev_cx_idx);
 }
 
 void exit_cx(struct task_struct *tsk) {

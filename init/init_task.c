@@ -215,7 +215,7 @@ struct task_struct init_task
 #endif
 	.cxu_data = NULL,
 	.cx_permission = NULL,
-	.cx_index = 0,
+	.ucx_sel = 0,
 	.cx_status = 0,
 
 };
