@@ -239,28 +239,28 @@ static uint get_mcx_enable_bit(cxu_id_t cxu_id, cx_state_id_t state_id) {
 }
 
 static int save_ctx_to_process(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id) {
-    cx_stctxs_t state_ctx_status = {.idx = CX_READ_STATUS()};
+    cx_stctxs_t status = {.idx = CX_READ_STATUS()};
 
-    tsk->cxu_data[cxu_id].state[state_id].v_state.status = state_ctx_status.idx;
-    for (int i = 0; i < state_ctx_status.sel.state_size; i++) {
+    tsk->cxu_data[cxu_id].state[state_id].v_state.status = status.idx;
+    for (int i = 0; i < status.sel.state_size; i++) {
         tsk->cxu_data[cxu_id].state[state_id].v_state.data[i] = CX_READ_STATE(i);
     }    
     return 0;
 }
 
 static void restore_ctx_to_process(cx_virt_data_t *virt_data) {
-    cx_stctxs_t state_ctx_status = {.idx = virt_data->status};
-    int size = state_ctx_status.sel.state_size;
+    cx_stctxs_t status = {.idx = virt_data->status};
+    int size = status.sel.state_size;
     // TODO: This is not robust, and it's quite possible that we're not 0'ing values from 
     // the previous state.
     for (int i = 0; i < size; i++) {
         CX_WRITE_STATE(i, virt_data->data[i]);
     }
-    state_ctx_status.sel.cs = CX_CLEAN;
-    virt_data->status = state_ctx_status.idx;
+    status.sel.cs = CX_CLEAN;
+    virt_data->status = status.idx;
 }
 
-void cx_context_save(struct task_struct *tsk) {
+void cx_process_save(struct task_struct *tsk) {
     tsk->ucx_sel = csr_read(CX_SELECTOR_USER);
     // tsk->cx_status = csr_read(CX_STATUS);
     save_cx_en_csrs(tsk);
@@ -281,7 +281,7 @@ void cx_context_save(struct task_struct *tsk) {
     }
 }
 
-void cx_context_restore(struct task_struct *tsk) {
+void cx_process_restore(struct task_struct *tsk) {
     restore_cx_en_csrs(tsk);
     for (int i = 0; i < 8; i++) {
         uint mcx_enable = tsk->cx_permission[i];
