@@ -222,8 +222,9 @@ struct task_struct init_task
 EXPORT_SYMBOL(init_task);
 
 cxu_info_t cxu[NUM_CXUS];
+int owning_process_table[NUM_CXUS][MAX_NUM_STATES];
 EXPORT_SYMBOL(cxu);
-
+EXPORT_SYMBOL(owning_process_table);
 
 /*
  * Initial thread structure. Alignment of this is handled by a special
