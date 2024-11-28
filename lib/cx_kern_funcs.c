@@ -624,6 +624,12 @@ void cx_first_use(void) {
     cxu_id_t cxu_id = CX_GET_CXU_ID(prev_sel);
     cx_state_id_t state_id = CX_GET_STATE_ID(prev_sel);
 
+    if (cxu[state_id].num_states == 0) {
+        set_task_cx_permission(current, cxu_id, state_id);
+        set_mcx_enable(cxu_id, state_id);
+        return;
+    }
+
     pr_info("0\n");
     int prev_owning_process = owning_process_table[cxu_id][state_id];
     if (prev_owning_process != -1) {
