@@ -24,7 +24,6 @@ typedef struct cxu_info_t {
     int num_states;
 } cxu_info_t;
 
-
 // Used per process to store state information. 
 
 typedef struct cx_virt_data_t {
@@ -34,7 +33,7 @@ typedef struct cx_virt_data_t {
 
 typedef struct state_t {
     cx_virt_data_t v_state;
-    uint v_id[4]; // 128 bits - stores which v_ids are in use
+    uint v_id[2]; // 128 bits - stores which v_ids are in use
 } state_t;
 
 typedef struct cxu_t {

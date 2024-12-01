@@ -19,7 +19,7 @@ extern cxu_info_t cxu[NUM_CXUS];
 extern int owning_process_table[NUM_CXUS][MAX_NUM_STATES];
 
 static inline cx_sel_t gen_cx_sel(cxu_id_t cxu_id, cx_state_id_t state_id,
-                                  cx_vstate_id_t vstate_id) 
+                                  cx_vstate_id_t vstate_id)
 {
     cx_idx_t cx_sel = {.sel = {   .cxu_id = cxu_id,
                                   .state_id = state_id,
@@ -27,6 +27,17 @@ static inline cx_sel_t gen_cx_sel(cxu_id_t cxu_id, cx_state_id_t state_id,
                                   .version = 1,
                                   .iv = 0}};
     return cx_sel.idx;
+}
+
+static inline cx_idx_t gen_cx_idx(cxu_id_t cxu_id, cx_state_id_t state_id,
+                                  cx_vstate_id_t vstate_id) 
+{
+    cx_idx_t cx_sel = {.sel = {   .cxu_id = cxu_id,
+                                  .state_id = state_id,
+                                  .v_state_id = vstate_id,
+                                  .version = 1,
+                                  .iv = 0}};
+    return cx_sel;
 }
 
 static inline int get_free_state(cxu_id_t cxu_id) {
@@ -47,7 +58,7 @@ static inline int get_free_state(cxu_id_t cxu_id) {
 }
 
 static int get_free_vstate(cxu_id_t cxu_id, cx_state_id_t state_id) {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < VSTATE_WORDS; i++) {
         if (current->cxu_data[cxu_id].state[state_id].v_id[i] < 0xFFFFFFFF) {
             for (int j = 0; j < 32; j++) {
                 uint bit = GET_BITS(current->cxu_data[cxu_id].state[state_id].v_id[i], j, 1);
@@ -62,7 +73,7 @@ static int get_free_vstate(cxu_id_t cxu_id, cx_state_id_t state_id) {
 }
 
 static bool is_vstate_free(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id) {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < VSTATE_WORDS; i++) {
         if (tsk->cxu_data[cxu_id].state[state_id].v_id[i] != 0) {
             return false;
         }
@@ -135,13 +146,13 @@ void restore_cx_en_csrs(struct task_struct *tsk) {
 }
 
 static void free_vstates(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id) {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < VSTATE_WORDS; i++) {
         tsk->cxu_data[cxu_id].state[state_id].v_id[i] = 0;
     }
 }
 
 static void free_vstate(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id, cx_vstate_id_t vstate) {
-    tsk->cxu_data[cxu_id].state[state_id].v_id[vstate / 4] &= ~(1 << vstate);
+    tsk->cxu_data[cxu_id].state[state_id].v_id[vstate / VSTATE_WORDS] &= ~(1 << vstate);
 }
 
 void cx_init(void)
@@ -188,7 +199,7 @@ void cx_alloc_process_structs(struct task_struct *tsk) {
     for (int i = 0; i < NUM_CXUS; i++) {
         for (int j = 0; j < MAX_NUM_STATES; j++) {
             tsk->cxu_data[i].state[j].v_state.data = NULL; // kzalloc(sizeof(uint) * MAX_NUM_STATES, GFP_KERNEL);
-            for (int k = 0; k < 4; k++) {
+            for (int k = 0; k < VSTATE_WORDS; k++) {
                 tsk->cxu_data[i].state[j].v_id[k] = 0;
             }
         }
@@ -323,7 +334,7 @@ static void restore_ctx_to_process(cx_virt_data_t *virt_data) {
 void cx_context_save(struct task_struct *tsk) {
     tsk->ucx_sel = csr_read(CX_SELECTOR_USER);
     // tsk->cx_status = csr_read(CX_STATUS);
-    // save_cx_en_csrs(tsk);
+    save_cx_en_csrs(tsk);
     for (int i = 0; i < 8; i++) {
         uint mcx_enable = tsk->cx_permission[i];
         for (int j = 0; j < 32; j++) {
@@ -370,13 +381,35 @@ static inline bool is_valid_state_id(cxu_id_t cxu_id, cx_state_id_t state_id) {
     return false;
 }
 
-static int try_alloc_state(cxu_id_t cxu_id, cx_virt_t cx_virt) {
+static cx_idx_t try_alloc_state_exclusive(cxu_id_t cxu_id, cx_virt_t cx_virt) {
     cx_state_id_t state_id = get_free_state(cxu_id);
     if (is_valid_state_id(cxu_id, state_id)) {
         cxu[cxu_id].state_info[state_id].virt = cx_virt;
         current->cxu_data[cxu_id].state[state_id].v_state.data = kzalloc(sizeof(uint) * MAX_STATE_SIZE, GFP_KERNEL);
+        cx_vstate_id_t vstate = get_free_vstate(cxu_id, state_id);
+
+        // Counting how many processes are using this state context
+        cxu[cxu_id].state_info[state_id].counter += 1;
+
+        return gen_cx_idx(cxu_id, state_id, vstate);
     }
-    return state_id;
+    cx_idx_t sel = {.idx = -1};
+    return sel;
+}
+
+static cx_idx_t try_alloc_state_intra(cxu_id_t cxu_id, cx_virt_t cx_virt) {
+    // TODO: get the least used state context
+    for (int i = 0; i < cxu[cxu_id].num_states; i++) {
+        if (!is_vstate_free(current, cxu_id, i) &&
+            cxu[cxu_id].state_info[i].virt == CX_INTRA_VIRT) {
+            cx_vstate_id_t vstate = get_free_vstate(cxu_id, i);
+            if (vstate >= 0) {
+                return gen_cx_idx(cxu_id, i, vstate);
+            }
+        }
+    }
+    cx_idx_t sel = {.idx = -1};
+    return sel;
 }
 
 static void free_state(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id) {
@@ -480,6 +513,7 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
         cx_alloc_process_structs(current);
         clear_cx_en_csrs();
         clear_cx_permission();
+        csr_write(CX_SELECTOR_USER, CX_LEGACY);
     }
     
     int cxu_id = -1;
@@ -509,77 +543,94 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
 
     if (cxu[cxu_id].num_states == 0) {
         return gen_cx_sel(cxu_id, 0, 0);
-    } else {
-        int state_id = -1;
-        if (cx_virt == CX_NO_VIRT) {
-            state_id = try_alloc_state(cxu_id, cx_virt);
-        } else if (cx_virt == CX_INTER_VIRT) {
-            // Try and get an exclusive virt type
-            if (cx_virt_idx.idx == -1) {
-                state_id = try_alloc_state(cxu_id, cx_virt);
-            } else {
-                cx_state_id_t user_state_id = cx_virt_idx.sel.state_id;
-                if (cxu[cxu_id].state_info[user_state_id].virt != cx_virt) {
-                    return -1;
-                }
-                // add_active_pid(cxu_id, state_id);
+    }
+
+    cx_idx_t sel = {.idx = -1};
+    if (cx_virt == CX_NO_VIRT) {
+        sel = try_alloc_state_exclusive(cxu_id, cx_virt);
+    }
+    else if (cx_virt == CX_INTRA_VIRT) {
+        if (cx_virt_idx.idx == -1) {
+            sel = try_alloc_state_exclusive(cxu_id, cx_virt);
+            if (sel.sel.iv == 1) {
+                sel = try_alloc_state_intra(cxu_id, cx_virt);
             }
         } else {
-            pr_info("Undefined virt type\n");
-            return -1;
+            cx_state_id_t user_state_id = cx_virt_idx.sel.state_id;
+            if (cxu[cxu_id].state_info[user_state_id].virt != cx_virt) {
+                return -1;
+            }
+            // TODO: Share specified selector
         }
-        if (state_id < 0) {
-            pr_info("state id less than 0\n");
-            return -1;
-        }
-        uint vstate = get_free_vstate(cxu_id, state_id);
-        // Save the old sel and reset the CXU state for the new index
-        cx_sel_t sel = gen_cx_sel(cxu_id, state_id, vstate);
-        cx_sel_t prev_sel = csr_read(CX_SELECTOR_USER);
-        cxu_id_t prev_cxu_id = CX_GET_CXU_ID(prev_sel);
-        cx_state_id_t prev_state_id = CX_GET_STATE_ID(prev_state_id);
-
-        struct task_struct *prev_task = pid_task(find_vpid(owning_process_table[cxu_id][state_id]), PIDTYPE_PID);
-        set_mcx_enable(cxu_id, state_id);
-        if (prev_sel != CX_INVALID_SELECTOR &&
-            prev_sel != CX_LEGACY &&
-            prev_cxu_id == cxu_id &&
-            prev_state_id == state_id &&
-            owning_process_table[cxu_id][state_id] != -1) {
-            pr_info("cx_open trap\n");
-            save_ctx_to_process(prev_task, cxu_id, state_id);
-        }
-
-        csr_write( CX_SELECTOR_USER, sel );
-
-        int retval = init_state();
-
-        if (retval == -1) {
-            pr_info("Init state issue\n");
-            return -1;
-        }
-        
-        // Counting how many processes are using this state context
-        cxu[cxu_id].state_info[state_id].counter += 1;
-        csr_write(CX_SELECTOR_USER, prev_sel);
-
-        if (prev_sel != CX_INVALID_SELECTOR && 
-            prev_sel != CX_LEGACY && 
-            prev_cxu_id == cxu_id && 
-            prev_state_id == state_id &&
-            owning_process_table[cxu_id][state_id] != -1
-            ) {
-            pr_info("prev_sel: %08x\n", prev_sel);
-            restore_ctx_to_process(&prev_task->cxu_data[cxu_id].state[state_id].v_state);
-        }
-
-        if (owning_process_table[cxu_id][state_id] != current->pid) {
-            clear_mcx_enable(cxu_id, state_id);
-        }
-
-        set_task_cx_permission(current, cxu_id, state_id);
-        return sel;
     }
+    else if (cx_virt == CX_INTER_VIRT) {
+        // Try and get an exclusive virt type
+        if (cx_virt_idx.idx == -1) {
+            sel = try_alloc_state_exclusive(cxu_id, cx_virt);
+        } else {
+            cx_state_id_t user_state_id = cx_virt_idx.sel.state_id;
+            if (cxu[cxu_id].state_info[user_state_id].virt != cx_virt) {
+                return -1;
+            }
+            // add_active_pid(cxu_id, state_id);
+        }
+    } else {
+        pr_info("Undefined virt type\n");
+        return -1;
+    }
+
+    // pr_info("sel: %08x, %d\n", sel.idx, sel.idx);
+    if (sel.sel.iv < 0) {
+        pr_info("state id less than 0\n");
+        return -1;
+    }
+
+    cx_state_id_t state_id = sel.sel.state_id;
+
+    // uint vstate = get_free_vstate(cxu_id, state_id);
+    // cx_sel_t sel = gen_cx_sel(cxu_id, state_id, vstate);
+
+    // Save the old sel and reset the CXU state for the new index
+    cx_sel_t prev_sel = csr_read(CX_SELECTOR_USER);
+    cxu_id_t prev_cxu_id = CX_GET_CXU_ID(prev_sel);
+    cx_state_id_t prev_state_id = CX_GET_STATE_ID(prev_state_id);
+
+    struct task_struct *prev_task = pid_task(find_vpid(owning_process_table[cxu_id][state_id]), PIDTYPE_PID);
+    set_mcx_enable(cxu_id, state_id);
+    if (prev_sel != CX_INVALID_SELECTOR &&
+        prev_sel != CX_LEGACY &&
+        prev_cxu_id == cxu_id &&
+        prev_state_id == state_id &&
+        owning_process_table[cxu_id][state_id] != -1) {
+        pr_info("cx_open trap\n");
+        save_ctx_to_process(prev_task, cxu_id, state_id);
+    }
+
+    csr_write( CX_SELECTOR_USER, sel.idx );
+
+    int retval = init_state();
+
+    if (retval == -1) {
+        pr_info("Init state issue\n");
+        return -1;
+    }
+
+    csr_write(CX_SELECTOR_USER, prev_sel);
+
+    if (prev_sel != CX_INVALID_SELECTOR &&
+        prev_sel != CX_LEGACY &&
+        prev_cxu_id == cxu_id &&
+        prev_state_id == state_id &&
+        owning_process_table[cxu_id][state_id] != -1) {
+        restore_ctx_to_process(&prev_task->cxu_data[cxu_id].state[state_id].v_state);
+    }
+
+    if (owning_process_table[cxu_id][state_id] != current->pid) {
+        clear_mcx_enable(cxu_id, state_id);
+    }
+
+    set_task_cx_permission(current, cxu_id, state_id);
+    return sel.idx;
 }
 
 int cx_copy_process_data(struct task_struct *new) {
@@ -596,7 +647,7 @@ int cx_copy_process_data(struct task_struct *new) {
                 cx_sel_t cx_sel = gen_cx_sel(i, j, 0);
                 cx_csr_write(CX_SELECTOR_USER, cx_sel);
                 save_ctx_to_process(new, i, j);
-                for (int k = 0; k < 4; k++) {
+                for (int k = 0; k < VSTATE_WORDS; k++) {
                     new->cxu_data[i].state[j].v_id[k] = current->cxu_data[i].state[j].v_id[k];
                 }
             }
@@ -610,7 +661,7 @@ int cx_copy_process_data(struct task_struct *new) {
 
 // We should check to make sure that the active selector is valid. 
 void cx_first_use(void) {
-    pr_info("in first use trap\n");
+    // pr_info("in first use trap: %08x\n", cx_csr_read(CX_SELECTOR_USER));
     if (current->cxu_data == NULL || current->cx_permission == NULL) {
         pr_info("CX not active for this process\n");
         pr_info("Active cx_sel: %08x\n", cx_csr_read(CX_SELECTOR_USER));
@@ -665,8 +716,6 @@ void exit_cx(struct task_struct *tsk) {
                 uint vid_clear = is_vstate_free(tsk, cxu_id, state_id);
                 uint mcx_enable_bit = GET_BITS(mcx_enable, j, 1);
                 if (mcx_enable_bit && !vid_clear) {
-                    pr_info("clearing\n");
-                    // pr_info("cxu_id: %d, state_id: %d!\n", cxu_id, state_id);
                     // pr_info("counter: %d\n", cxu[cxu_id].state_info[state_id].counter);
                     free_vstates(tsk, cxu_id, state_id);
                     cxu[cxu_id].state_info[state_id].counter--;
@@ -691,5 +740,6 @@ void exit_cx(struct task_struct *tsk) {
 		kfree(tsk->cxu_data);
 		tsk->cxu_data = NULL;
 	}
+    clear_cx_en_csrs();
     csr_write(CX_SELECTOR_USER, CX_LEGACY);
 }
