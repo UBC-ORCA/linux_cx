@@ -34,6 +34,8 @@
 #include <asm/irq_stack.h>
 
 #include "../../../../include/utils.h"
+#include <linux/kern_funcs.h>
+
 
 int show_unhandled_signals = 1;
 
@@ -366,16 +368,11 @@ void do_trap_ecall_u(struct pt_regs *regs)
 /* TODO (cx, Brandon): This is incredibly hacky - Used for virtualization of state. */
 asmlinkage __visible __trap_section void do_trap_first_cx_use(struct pt_regs *regs)
 {
-	long syscall = 467;
-
 	regs->orig_a0 = regs->a0;
 
 	riscv_v_vstate_discard(regs);
 
-	if (syscall >= 0 && syscall < NR_syscalls)
-		syscall_handler(regs, syscall);
-	else if (syscall != -1)
-		regs->a0 = -ENOSYS;
+	first_use_exception();
 
 	syscall_exit_to_user_mode(regs);
 }

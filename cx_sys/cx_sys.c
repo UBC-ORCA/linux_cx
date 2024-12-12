@@ -277,7 +277,7 @@ SYSCALL_DEFINE0(context_restore)
         return cx_context_restore(current);
 }
 
-SYSCALL_DEFINE0(do_nothing)
+int first_use_exception()
 {
         if (current->mcx_table == NULL) {
                 pr_info("mcx table is null (trap)\n");

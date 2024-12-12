@@ -14,4 +14,5 @@ int cx_copy_table(struct task_struct *new);
 int initialize_state(uint status);
 int cx_context_save(struct task_struct *tsk);
 int cx_context_restore(struct task_struct *tsk);
+int first_use_exception(void);
 #endif
