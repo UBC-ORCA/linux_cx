@@ -16,8 +16,8 @@ extern cx_entry_t cx_map[NUM_CX];
 int cx_process_alloc(struct task_struct *tsk) {
 	tsk->mcx_table = kzalloc(sizeof(int) * CX_SEL_TABLE_NUM_ENTRIES, GFP_KERNEL);
 	if (tsk->mcx_table == NULL) {
-			pr_info("failed mcx_table allocation\n");
-			return -ENOMEM;;
+		pr_info("failed mcx_table allocation\n");
+		return -ENOMEM;;
 	}
 
 	tsk->cx_os_state_table = (cx_os_state_t *)kzalloc(sizeof(cx_os_state_t) * CX_SEL_TABLE_NUM_ENTRIES, GFP_KERNEL);
@@ -50,75 +50,75 @@ int cx_init_process(struct task_struct *tsk) {
 
 int cx_init(void) {
 		
-        pr_info("Ran in part of main\n");
+    pr_info("Ran in part of main\n");
 		
-		// can't 0 initialize this because we might not have an mcx_table 
-		// allocated yet
-		// csr_write(CX_INDEX, 0);
+	// can't 0 initialize this because we might not have an mcx_table 
+	// allocated yet
+	// csr_write(CX_INDEX, 0);
 
-		// 0 initialize the mcx_selector csr
-		csr_write(MCX_SELECTOR, 0);
+	// 0 initialize the mcx_selector csr
+	csr_write(MCX_SELECTOR, 0);
 
-		// 0 initialize the cx_status csr
-		csr_write(CX_STATUS, 0);
+	// 0 initialize the cx_status csr
+	csr_write(CX_STATUS, 0);
 
-        cx_map[0].cx_guid = CX_GUID_MULDIV;
-        cx_map[1].cx_guid = CX_GUID_ADDSUB;
-        cx_map[2].cx_guid = CX_GUID_MULACC;
-        cx_map[3].cx_guid = CX_GUID_PEXT;
+    cx_map[0].cx_guid = CX_GUID_MULDIV;
+    cx_map[1].cx_guid = CX_GUID_ADDSUB;
+    cx_map[2].cx_guid = CX_GUID_MULACC;
+    cx_map[3].cx_guid = CX_GUID_PEXT;
 
-        cx_map[0].num_states = CX_MULDIV_NUM_STATES;
-        cx_map[1].num_states = CX_ADDSUB_NUM_STATES;
-        cx_map[2].num_states = CX_MULACC_NUM_STATES;
-        cx_map[3].num_states = CX_PEXT_NUM_STATES;
+    cx_map[0].num_states = CX_MULDIV_NUM_STATES;
+    cx_map[1].num_states = CX_ADDSUB_NUM_STATES;
+    cx_map[2].num_states = CX_MULACC_NUM_STATES;
+    cx_map[3].num_states = CX_PEXT_NUM_STATES;
 
-        int32_t num_states = -1;
+    int32_t num_states = -1;
 
-        for (int i = 0; i < NUM_CX; i++) {
+    for (int i = 0; i < NUM_CX; i++) {
 
-                num_states = cx_map[i].num_states;
+        num_states = cx_map[i].num_states;
 
-                // stateless cxu
-                if (num_states == 0) {
-						cx_map[i].state_info = (cx_state_info_t *) kzalloc(sizeof(cx_state_info_t), GFP_KERNEL);	
-						if (!cx_map[i].state_info) {
-							return -ENOMEM;
-						}					
-						cx_map[i].state_info[0].counter = 0;
-						cx_map[i].state_info[0].share = -1;
-						cx_map[i].state_info[0].pid = -1;
-                }
-                // stateful cxu
-                else {
-                        cx_map[i].state_info = (cx_state_info_t *) kzalloc(sizeof(cx_state_info_t) * num_states, GFP_KERNEL);
-						if (!cx_map[i].state_info) {
-							return -ENOMEM;
-						}
-						for (int j = 0; j < num_states; j++) {
-							cx_map[i].state_info[j].share = -1;
-							cx_map[i].state_info[j].counter = 0;
-							cx_map[i].state_info[j].pid = -1;
-						}
-                        cx_map[i].avail_state_ids = make_queue(num_states);
-                }
+        // stateless cxu
+        if (num_states == 0) {
+			cx_map[i].state_info = (cx_state_info_t *) kzalloc(sizeof(cx_state_info_t), GFP_KERNEL);	
+			if (!cx_map[i].state_info) {
+				return -ENOMEM;
+			}					
+			cx_map[i].state_info[0].counter = 0;
+			cx_map[i].state_info[0].share = -1;
+			cx_map[i].state_info[0].pid = -1;
         }
+            // stateful cxu
+        else {
+            cx_map[i].state_info = (cx_state_info_t *) kzalloc(sizeof(cx_state_info_t) * num_states, GFP_KERNEL);
+			if (!cx_map[i].state_info) {
+				return -ENOMEM;
+			}
+			for (int j = 0; j < num_states; j++) {
+				cx_map[i].state_info[j].share = -1;
+				cx_map[i].state_info[j].counter = 0;
+				cx_map[i].state_info[j].pid = -1;
+			}
+                cx_map[i].avail_state_ids = make_queue(num_states);
+         }
+    }
 
-        return 0;
+    return 0;
 }
 
 void copy_state_to_os( uint state_size, uint index, struct task_struct *tsk ) 
 {		
-        for (int i = 0; i < state_size; i++) {
-                tsk->cx_os_state_table[index].data[i] = CX_READ_STATE(i);
-        }
+    for (int i = 0; i < state_size; i++) {
+        tsk->cx_os_state_table[index].data[i] = CX_READ_STATE(i);
+    }
 }
 
 void copy_state_from_os( uint index, struct task_struct *tsk ) 
 {
-        cx_os_state_t src = tsk->cx_os_state_table[index];
-        for (int i = 0; i < GET_CX_STATE_SIZE(src.ctx_status); i++) {
-                CX_WRITE_STATE(i, src.data[i]);
-        }
+    cx_os_state_t src = tsk->cx_os_state_table[index];
+    for (int i = 0; i < GET_CX_STATE_SIZE(src.ctx_status); i++) {
+        CX_WRITE_STATE(i, src.data[i]);
+    }
 }
 
 static void save_active_cxu_data(struct task_struct *tsk, uint cx_index, uint cx_status) {
@@ -351,107 +351,109 @@ void exit_cx(struct task_struct *tsk) {
 
 int initialize_state(uint status) 
 {
-        // 4. Read the state to get the state_size
-        uint state_size = GET_CX_STATE_SIZE(status);
+    // 4. Read the state to get the state_size
+    uint state_size = GET_CX_STATE_SIZE(status);
 
-        if (state_size > 1023 || state_size < 0) {
-                return 1;
+    if (state_size > 1023 || state_size < 0) {
+        return 1;
+    }
+
+    // 5. Set the CXU to initial state
+    uint sw_init = GET_CX_INITIALIZER(status);
+
+    CX_WRITE_STATUS(CX_INITIAL);
+
+    // hw required to set to dirty after init, while sw does it explicitly
+    if (sw_init) {
+        for (int i = 0; i < state_size; i++) {
+            CX_WRITE_STATE(i, 0);
         }
-
-        // 5. Set the CXU to initial state
-        uint sw_init = GET_CX_INITIALIZER(status);
-
-        CX_WRITE_STATUS(CX_INITIAL);
-
-        // hw required to set to dirty after init, while sw does it explicitly
-        if (sw_init) {
-                for (int i = 0; i < state_size; i++) {
-                        CX_WRITE_STATE(i, 0);
-                }
-                CX_WRITE_STATUS(CX_DIRTY);
-        }
-        return 0;
+        CX_WRITE_STATUS(CX_DIRTY);
+    }
+    return 0;
 }
 
 int cx_context_save(struct task_struct *tsk) {
-        if (tsk->mcx_table == NULL) {
-                pr_info("mcx table is null (save)\n");
-        }
+    if (tsk->mcx_table == NULL) {
+        pr_info("mcx table is null (save)\n");
+    }
 
-	    // Save the cx_index
-        cx_sel_t cx_sel_index = cx_csr_read(CX_INDEX);
-        tsk->cx_index = cx_sel_index;
+	// Save the cx_index
+    cx_sel_t cx_sel_index = cx_csr_read(CX_INDEX);
+    tsk->cx_index = cx_sel_index;
 
-		uint cx_error = cx_csr_read(CX_STATUS);
-        tsk->cx_status = cx_error;
+	int cx_error = cx_csr_read(CX_STATUS);
+    tsk->cx_status = cx_error;
 
-        for (int i = 1; i < CX_SEL_TABLE_NUM_ENTRIES; i++) {
+    for (int i = 1; i < CX_SEL_TABLE_NUM_ENTRIES; i++) {
         
-                // save the state data
-                if (GET_CX_CXE(tsk->mcx_table[i]) == 0) {
-						
-						// No data to save for stateless cxs
-						if (cx_map[GET_CX_ID(tsk->mcx_table[i])].num_states == 0) {
-							continue;
-						}
+		// save the state data
+		if (GET_CX_CXE(tsk->mcx_table[i]) != 0) {
+			continue;
+		}
 
-						// write the index to be saved
-                        cx_csr_write(CX_INDEX, i);
+		// No data to save for stateless cxs
+		if (cx_map[GET_CX_ID(tsk->mcx_table[i])].num_states == 0) {
+			continue;
+		}
 
-						uint cx_status = CX_READ_STATUS();
-                        save_active_cxu_data(tsk, i, cx_status);
+		// write the index to be saved
+		cx_csr_write(CX_INDEX, i);
 
-                        // set the state context back to its initial state
-                        int failure = initialize_state(cx_status);
+		uint cx_status = CX_READ_STATUS();
+		save_active_cxu_data(tsk, i, cx_status);
 
-                        if (failure) {
-								pr_info("There was a failure!\n");
-                                return -1;
-                        }
-                }
-        }
+		// set the state context back to its initial state
+		int failure = initialize_state(cx_status);
 
-        cx_csr_write(CX_INDEX, tsk->cx_index);
-        return 0;
+		if (failure) {
+			pr_info("There was a failure!\n");
+			return -1;
+		}
+    }
+
+    cx_csr_write(CX_INDEX, tsk->cx_index);
+    return 0;
 }
 
 int cx_context_restore(struct task_struct *tsk) {
-	    if (tsk->mcx_table == NULL) {
-            pr_info("mcx table is null (restore)\n");
-        }
+	if (tsk->mcx_table == NULL) {
+		pr_info("mcx table is null (restore)\n");
+	}
 
-	    // 1. Restore error
-        csr_write(CX_STATUS, tsk->cx_status);
-        
-        // 2. Restore mcx_table
-        csr_write(MCX_TABLE, &tsk->mcx_table[0]);
+	// 1. Restore error
+	csr_write(CX_STATUS, tsk->cx_status);
 
-        // 3. Restore state information
-        for (int i = 1; i < CX_SEL_TABLE_NUM_ENTRIES; i++) {
-                
-                // ignore table indicies that aren't occupied, and only save dirty states
-                if (GET_CX_CXE(tsk->mcx_table[i]) == 0) {
+	// 2. Restore mcx_table
+	csr_write(MCX_TABLE, &tsk->mcx_table[0]);
 
-                        // Stateless cxs don't need to be restored
-						if (cx_map[GET_CX_ID(tsk->mcx_table[i])].num_states == 0) {
-							continue;
-						}
+	// 3. Restore state information
+	for (int i = 1; i < CX_SEL_TABLE_NUM_ENTRIES; i++) {
 
-						// Write the index to be restored
-                        cx_csr_write( CX_INDEX,  i );
-                        
-                        // Restore state
-                        copy_state_from_os( i, tsk );
+		// ignore table indicies that aren't occupied, and only save dirty states
+		if (GET_CX_CXE(tsk->mcx_table[i]) != 0) {
+			continue;
+		}
 
-                        // Restoring status word + setting to clean
-                		cx_stctxs_t cx_stctxs = {.idx = tsk->cx_os_state_table[i].ctx_status};
-                        tsk->cx_os_state_table[i].ctx_status = cx_stctxs.idx;
-                        CX_WRITE_STATUS(cx_stctxs.idx);
-                }
-        }
+		// Stateless cxs don't need to be restored
+		if (cx_map[GET_CX_ID(tsk->mcx_table[i])].num_states == 0) {
+			continue;
+		}
 
-        // 4. Restore index
-        cx_csr_write( CX_INDEX, tsk->cx_index );
+		// Write the index to be restored
+		cx_csr_write( CX_INDEX,  i );
 
-        return 0;
+		// Restore state
+		copy_state_from_os( i, tsk );
+
+		// Restoring status word + setting to clean
+		cx_stctxs_t cx_stctxs = {.idx = tsk->cx_os_state_table[i].ctx_status};
+		tsk->cx_os_state_table[i].ctx_status = cx_stctxs.idx;
+		CX_WRITE_STATUS(cx_stctxs.idx);
+	}
+
+	// 4. Restore index
+	cx_csr_write( CX_INDEX, tsk->cx_index );
+
+	return 0;
 }
