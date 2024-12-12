@@ -48,6 +48,9 @@
 #include <linux/uidgid_types.h>
 #include <asm/kmap_size.h>
 
+#include <linux/queue.h>
+#include "../../../include/cx_kern_structs.h"
+
 /* task_struct member predeclarations (sorted alphabetically): */
 struct audit_context;
 struct bio_list;
@@ -1567,6 +1570,16 @@ struct task_struct {
 #ifdef CONFIG_USER_EVENTS
 	struct user_event_mm		*user_event_mm;
 #endif
+
+	uint cx_status;
+	uint cx_index;
+	uint *mcx_table;
+	cx_os_state_t *cx_os_state_table;
+
+	queue_t *cx_table_avail_indices;
+
+	// TODO: This shouldn't be here - should be in the device_struct.
+	// cx_entry_t cx_map[NUM_CX];
 
 	/*
 	 * New fields for task_struct should be added above here, so that

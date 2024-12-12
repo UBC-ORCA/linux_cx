@@ -1,0 +1,1 @@
+obj-y := cx_sys.o

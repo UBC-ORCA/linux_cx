@@ -15,6 +15,9 @@
 #include <asm/ptrace.h>
 #include <asm/csr.h>
 
+#include <linux/kern_funcs.h>
+#include "../../../../../include/utils.h"
+
 #ifdef CONFIG_FPU
 extern void __fstate_save(struct task_struct *save_to);
 extern void __fstate_restore(struct task_struct *restore_from);
@@ -70,6 +73,26 @@ static __always_inline bool has_fpu(void) { return false; }
 #define __switch_to_fpu(__prev, __next) do { } while (0)
 #endif
 
+static inline void __switch_to_cx(struct task_struct *prev,
+				   struct task_struct *next)
+{
+	// don't context switch if it's the same process
+	// if (prev->mcx_table != NULL && prev->mcx_table == next->mcx_table) {
+	// 	pr_info("same process!\n");
+	// 	return;
+	// }
+	/* Saving */
+	if (prev->mcx_table != NULL) {
+		cx_context_save(prev);
+	}
+
+	/* Restoring */
+	if (next->mcx_table != NULL) {
+		cx_context_restore(next);
+	}
+
+}
+
 extern struct task_struct *__switch_to(struct task_struct *,
 				       struct task_struct *);
 
@@ -97,6 +120,7 @@ do {							\
 	struct task_struct *__prev = (prev);		\
 	struct task_struct *__next = (next);		\
 	__set_prev_cpu(__prev->thread);			\
+	__switch_to_cx(__prev, __next);   \
 	if (has_fpu())					\
 		__switch_to_fpu(__prev, __next);	\
 	if (has_vector())					\

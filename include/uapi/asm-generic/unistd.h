@@ -841,8 +841,19 @@ __SYSCALL(__NR_lsm_list_modules, sys_lsm_list_modules)
 #define __NR_mseal 462
 __SYSCALL(__NR_mseal, sys_mseal)
 
+#define __NR_cx_open 463
+__SYSCALL(__NR_cx_open, sys_cx_open)
+#define __NR_cx_close 464
+__SYSCALL(__NR_cx_close, sys_cx_close)
+#define __NR_context_save 465
+__SYSCALL(__NR_context_save, sys_context_save)
+#define __NR_context_restore 466
+__SYSCALL(__NR_context_restore, sys_context_restore)
+#define __NR_do_nothing 467
+__SYSCALL(__NR_do_nothing, sys_do_nothing)
+
 #undef __NR_syscalls
-#define __NR_syscalls 463
+#define __NR_syscalls 468
 
 /*
  * 32 bit systems traditionally used different

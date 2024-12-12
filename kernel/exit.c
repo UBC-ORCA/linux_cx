@@ -77,6 +77,7 @@
 #include <asm/mmu_context.h>
 
 #include "exit.h"
+#include <linux/kern_funcs.h>
 
 /*
  * The default value should be high enough to not crash a system that randomly
@@ -857,6 +858,9 @@ void __noreturn do_exit(long code)
 #endif
 		if (tsk->mm)
 			setmax_mm_hiwater_rss(&tsk->signal->maxrss, tsk->mm);
+	}
+	if (tsk->mcx_table && group_dead) {
+		exit_cx(tsk);
 	}
 	acct_collect(code, group_dead);
 	if (group_dead)

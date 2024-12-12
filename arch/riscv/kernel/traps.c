@@ -33,6 +33,8 @@
 #include <asm/vector.h>
 #include <asm/irq_stack.h>
 
+#include "../../../../include/utils.h"
+
 int show_unhandled_signals = 1;
 
 static DEFINE_SPINLOCK(die_lock);
@@ -114,7 +116,6 @@ void die(struct pt_regs *regs, const char *str)
 void do_trap(struct pt_regs *regs, int signo, int code, unsigned long addr)
 {
 	struct task_struct *tsk = current;
-
 	if (show_unhandled_signals && unhandled_signal(tsk, signo)
 	    && printk_ratelimit()) {
 		pr_info("%s[%d]: unhandled signal %d code 0x%x at 0x" REG_FMT,
@@ -170,6 +171,14 @@ DO_ERROR_INFO(do_trap_insn_fault,
 asmlinkage __visible __trap_section void do_trap_insn_illegal(struct pt_regs *regs)
 {
 	bool handled;
+	u32 insn = (u32)regs->badaddr;
+	uint opc = insn & ((1<<7)-1);
+
+	if (opc == CX_REG_TYPE || opc == CX_IMM_TYPE || opc == CX_FLEX_TYPE) {
+		do_trap_first_cx_use(regs);
+		return;
+	}
+
 
 	if (user_mode(regs)) {
 		irqentry_enter_from_user_mode(regs);
@@ -352,6 +361,23 @@ void do_trap_ecall_u(struct pt_regs *regs)
 		irqentry_nmi_exit(regs, state);
 	}
 
+}
+
+/* TODO (cx, Brandon): This is incredibly hacky - Used for virtualization of state. */
+asmlinkage __visible __trap_section void do_trap_first_cx_use(struct pt_regs *regs)
+{
+	long syscall = 467;
+
+	regs->orig_a0 = regs->a0;
+
+	riscv_v_vstate_discard(regs);
+
+	if (syscall >= 0 && syscall < NR_syscalls)
+		syscall_handler(regs, syscall);
+	else if (syscall != -1)
+		regs->a0 = -ENOSYS;
+
+	syscall_exit_to_user_mode(regs);
 }
 
 #ifdef CONFIG_MMU

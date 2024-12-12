@@ -114,6 +114,8 @@
 
 #include <kunit/test.h>
 
+#include <linux/kern_funcs.h>
+
 static int kernel_init(void *);
 
 /*
@@ -687,6 +689,7 @@ static void __init setup_command_line(char *command_line)
 	saved_command_line_len = strlen(saved_command_line);
 }
 
+
 /*
  * We need to finalize in a non-__init function or else race conditions
  * between the root thread and the init thread may cause start_kernel to
@@ -710,6 +713,7 @@ static noinline void __ref __noreturn rest_init(void)
 	 * we schedule it before we create kthreadd, will OOPS.
 	 */
 	pid = user_mode_thread(kernel_init, NULL, CLONE_FS);
+
 	/*
 	 * Pin init on the boot CPU. Task migration is not properly working
 	 * until sched_init_smp() has been run. It will set the allowed
@@ -744,7 +748,9 @@ static noinline void __ref __noreturn rest_init(void)
 	 */
 	schedule_preempt_disabled();
 	/* Call into cpu_idle with preempt disabled */
+
 	cpu_startup_entry(CPUHP_ONLINE);
+
 }
 
 /* Check for early params. */
@@ -1488,9 +1494,10 @@ static int __ref kernel_init(void *unused)
 	rcu_end_inkernel_boot();
 
 	do_sysctl_args();
-
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
+		cx_init();
+		pr_info("init pid: %d\n", current->pid);
 		if (!ret)
 			return 0;
 		pr_err("Failed to execute %s (error %d)\n",

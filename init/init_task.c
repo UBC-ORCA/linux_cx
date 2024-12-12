@@ -207,8 +207,16 @@ struct task_struct init_task __aligned(L1_CACHE_BYTES) = {
 #ifdef CONFIG_SECCOMP_FILTER
 	.seccomp	= { .filter_count = ATOMIC_INIT(0) },
 #endif
+.mcx_table = NULL,
+.cx_os_state_table = NULL,
+.cx_table_avail_indices = NULL,
+.cx_index = 0,
+.cx_status = 0,
 };
 EXPORT_SYMBOL(init_task);
+
+cx_entry_t cx_map[NUM_CX];
+EXPORT_SYMBOL(cx_map);
 
 /*
  * Initial thread structure. Alignment of this is handled by a special

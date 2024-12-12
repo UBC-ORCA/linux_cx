@@ -118,6 +118,8 @@
 
 #include <kunit/visibility.h>
 
+#include <linux/kern_funcs.h>
+
 /*
  * Minimum number of threads to boot the kernel
  */
@@ -1107,6 +1109,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 		return NULL;
 
 	err = arch_dup_task_struct(tsk, orig);
+
 	if (err)
 		goto free_tsk;
 
@@ -1192,6 +1195,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->mm_cid_active = 0;
 	tsk->migrate_from_cpu = -1;
 #endif
+
 	return tsk;
 
 free_stack:
@@ -2195,6 +2199,8 @@ __latent_entropy struct task_struct *copy_process(
 			return ERR_PTR(-EINVAL);
 	}
 
+	/* Return some error here */
+
 	/*
 	 * Force any signals received before this point to be delivered
 	 * before the fork happens.  Collect up signals sent to multiple
@@ -2217,6 +2223,7 @@ __latent_entropy struct task_struct *copy_process(
 	p = dup_task_struct(current, node);
 	if (!p)
 		goto fork_out;
+
 	p->flags &= ~PF_KTHREAD;
 	if (args->kthread)
 		p->flags |= PF_KTHREAD;
@@ -2276,6 +2283,7 @@ __latent_entropy struct task_struct *copy_process(
 	INIT_LIST_HEAD(&p->sibling);
 	rcu_copy_process(p);
 	p->vfork_done = NULL;
+
 	spin_lock_init(&p->alloc_lock);
 
 	init_sigpending(&p->pending);
@@ -2309,11 +2317,30 @@ __latent_entropy struct task_struct *copy_process(
 
 	p->io_context = NULL;
 	audit_set_context(p, NULL);
+
 	cgroup_fork(p);
 	if (args->kthread) {
 		if (!set_kthread_struct(p))
 			goto bad_fork_cleanup_delayacct;
 	}
+
+	p->cx_index = cx_csr_read(CX_INDEX); // current->cx_index; ?
+	p->cx_status = cx_csr_read(CX_STATUS);
+	// We only want to create a new mcx_table, etc. if we have a new process.
+	// if we have a new thread, we want to copy the parent structs.
+	if (current->mcx_table && !(clone_flags & CLONE_THREAD)) {
+		cx_process_alloc(p);
+		retval = cx_copy_table(p);
+		if (retval < 0) {
+			exit_cx(p);
+			goto bad_fork_cleanup_delayacct;
+		}
+	} else {
+		p->mcx_table = current->mcx_table;
+		p->cx_os_state_table = current->cx_os_state_table;
+		p->cx_table_avail_indices = current->cx_table_avail_indices;
+	}
+
 #ifdef CONFIG_NUMA
 	p->mempolicy = mpol_dup(p->mempolicy);
 	if (IS_ERR(p->mempolicy)) {
