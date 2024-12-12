@@ -130,128 +130,128 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
                 current->mcx_table[cx_index] = cx_sel;
                 current->cx_os_state_table[cx_index].counter++;
                 cx_map[cx_id].state_info[0].counter++;
+                return cx_index;
+
+        }
         // stateful cx
-        } else {
-                int state_id = -1;
-                if (cx_share == CX_NO_VIRT) {
-                        // exclusive virt type fails if there is no available state
+        int state_id = -1;
+        if (cx_share == CX_NO_VIRT) {
+                // exclusive virt type fails if there is no available state
+                state_id = get_free_state(cx_id);
+                if (is_valid_state_id(cx_id, state_id)) {
+                        dequeue(cx_map[cx_id].avail_state_ids);
+                }
+        } else if (cx_share == CX_INTRA_VIRT) {
+                if (cx_share_sel == -1) {
+                        // prioritize getting an exclusive state
                         state_id = get_free_state(cx_id);
                         if (is_valid_state_id(cx_id, state_id)) {
                                 dequeue(cx_map[cx_id].avail_state_ids);
-                        }
-                } else if (cx_share == CX_INTRA_VIRT) {
-                        if (cx_share_sel == -1) {
-                                // prioritize getting an exclusive state
-                                state_id = get_free_state(cx_id);
-                                if (is_valid_state_id(cx_id, state_id)) {
-                                        dequeue(cx_map[cx_id].avail_state_ids);
-                                
-                                // share with another state in the same process
-                                } else {
-                                        int lowest_share_count = 0x7FFFFFFF;
-                                        for (int i = 0; i < cx_map[cx_id].num_states; i++) {
-                                                if (cx_map[cx_id].state_info[i].share == CX_INTRA_VIRT &&
-                                                    cx_map[cx_id].state_info[i].pid == current->pid) {
-                                                        if (cx_map[cx_id].state_info[i].counter < lowest_share_count) {
-                                                                state_id = i;
-                                                        }
-                                                }
-                                        }
-                                }
+                        
+                        // share with another state in the same process
                         } else {
-                                state_id = get_state_id_at_index(cx_id, cx_share, cx_share_sel);
-                        }
-                } else if (cx_share == CX_INTER_VIRT) {
-                        if (cx_share_sel == -1) {
-                                state_id = get_free_state(cx_id);
-                                if (is_valid_state_id(cx_id, state_id)) {
-                                        dequeue(cx_map[cx_id].avail_state_ids);
-                                
-                                // share with another state in the same process
-                                } else {
-                                        int lowest_share_count = 0x7FFFFFFF;
-                                        for (int i = 0; i < cx_map[cx_id].num_states; i++) {
-                                                // Only share if the state is being virtualized 
-                                                // with another, different process.
-                                                if (cx_map[cx_id].state_info[i].share == CX_INTER_VIRT &&
-                                                    cx_map[cx_id].state_info[i].pid != current->pid) {
-                                                        if (cx_map[cx_id].state_info[i].counter < lowest_share_count) {
-                                                                state_id = i;
-                                                        }
+                                int lowest_share_count = 0x7FFFFFFF;
+                                for (int i = 0; i < cx_map[cx_id].num_states; i++) {
+                                        if (cx_map[cx_id].state_info[i].share == CX_INTRA_VIRT &&
+                                                cx_map[cx_id].state_info[i].pid == current->pid) {
+                                                if (cx_map[cx_id].state_info[i].counter < lowest_share_count) {
+                                                        state_id = i;
                                                 }
                                         }
                                 }
-                        }
-                } else if (cx_share == CX_FULL_VIRT) {
-                        if (cx_share_sel == -1) {
-                                state_id = get_free_state(cx_id);
-                                if (is_valid_state_id(cx_id, state_id)) {
-                                        dequeue(cx_map[cx_id].avail_state_ids);
-                                } else {
-                                        int lowest_share_count = 0x7FFFFFFF;
-                                        for (int i = 0; i < cx_map[cx_id].num_states; i++) {
-                                                if (cx_map[cx_id].state_info[i].share == CX_FULL_VIRT) {
-                                                        if (cx_map[cx_id].state_info[i].counter < lowest_share_count) {
-                                                                state_id = i;
-                                                        }
-                                                }
-                                        }
-                                }
-                        } else {
-                                state_id = get_state_id_at_index(cx_id, cx_share, cx_share_sel);
                         }
                 } else {
-                        pr_info("Undefined share type\n");
-                        return -1;
+                        state_id = get_state_id_at_index(cx_id, cx_share, cx_share_sel);
                 }
-                if (state_id >= 0) {
-                        dequeue(current->cx_table_avail_indices);
+        } else if (cx_share == CX_INTER_VIRT) {
+                if (cx_share_sel == -1) {
+                        state_id = get_free_state(cx_id);
+                        if (is_valid_state_id(cx_id, state_id)) {
+                                dequeue(cx_map[cx_id].avail_state_ids);
+                        
+                        // share with another state in the same process
+                        } else {
+                                int lowest_share_count = 0x7FFFFFFF;
+                                for (int i = 0; i < cx_map[cx_id].num_states; i++) {
+                                        // Only share if the state is being virtualized 
+                                        // with another, different process.
+                                        if (cx_map[cx_id].state_info[i].share == CX_INTER_VIRT &&
+                                                cx_map[cx_id].state_info[i].pid != current->pid) {
+                                                if (cx_map[cx_id].state_info[i].counter < lowest_share_count) {
+                                                        state_id = i;
+                                                }
+                                        }
+                                }
+                        }
                 }
-                // task_unlock(current);
-                if (state_id < 0) {
-                        return -1;
+        } else if (cx_share == CX_FULL_VIRT) {
+                if (cx_share_sel == -1) {
+                        state_id = get_free_state(cx_id);
+                        if (is_valid_state_id(cx_id, state_id)) {
+                                dequeue(cx_map[cx_id].avail_state_ids);
+                        } else {
+                                int lowest_share_count = 0x7FFFFFFF;
+                                for (int i = 0; i < cx_map[cx_id].num_states; i++) {
+                                        if (cx_map[cx_id].state_info[i].share == CX_FULL_VIRT) {
+                                                if (cx_map[cx_id].state_info[i].counter < lowest_share_count) {
+                                                        state_id = i;
+                                                }
+                                        }
+                                }
+                        }
+                } else {
+                        state_id = get_state_id_at_index(cx_id, cx_share, cx_share_sel);
                 }
-                cx_map[cx_id].state_info[state_id].counter++;
-                current->cx_os_state_table[cx_index].counter++;
+        } else {
+                pr_info("Undefined share type\n");
+                return -1;
+        }
+        if (state_id >= 0) {
+                dequeue(current->cx_table_avail_indices);
+        }
+        // task_unlock(current);
+        if (state_id < 0) {
+                return -1;
+        }
+        cx_map[cx_id].state_info[state_id].counter++;
+        current->cx_os_state_table[cx_index].counter++;
 
-                cx_sel = gen_cx_sel(cx_id, state_id, 1, CX_VERSION);
-                current->mcx_table[cx_index] = cx_sel;
+        cx_sel = gen_cx_sel(cx_id, state_id, 1, CX_VERSION);
+        current->mcx_table[cx_index] = cx_sel;
 
-                // 1. Update os information
-                current->cx_os_state_table[cx_index].data = kzalloc(MAX_STATE_SIZE, GFP_KERNEL);
+        // 1. Update os information
+        current->cx_os_state_table[cx_index].data = kzalloc(MAX_STATE_SIZE, GFP_KERNEL);
 
-                // 2. Store the previous value in the cx_index csr
-                cx_sel_t prev_sel_index = cx_csr_read(CX_INDEX);
+        // 2. Store the previous value in the cx_index csr
+        cx_sel_t prev_sel_index = cx_csr_read(CX_INDEX);
 
-                // check if previous selector value is valid
-                if (prev_sel_index > 1023 || prev_sel_index < 0) {
-                        return -1;
-                }
-                
-                // 3. Update cx_index to the new value
-                cx_csr_write( CX_INDEX, cx_index );
+        // check if previous selector value is valid
+        if (prev_sel_index > 1023 || prev_sel_index < 0) {
+                return -1;
+        }
+        
+        // 3. Update cx_index to the new value
+        cx_csr_write( CX_INDEX, cx_index );
 
-                // 4 + 5
-                uint status = CX_READ_STATUS();
-                
-                int failure = initialize_state(status);
-                if (failure) {
-                        pr_info("there was a failure all along!\n");
-                        return -1;
-                }
-
-		status = CX_READ_STATUS();
-                current->cx_os_state_table[cx_index].ctx_status = status;
-
-                if (cx_map[cx_id].state_info[state_id].counter == 1) {
-                        cx_map[cx_id].state_info[state_id].share = GET_SHARE_TYPE(cx_share);
-                        cx_map[cx_id].state_info[state_id].pid = current->pid;
-                }
-
-                // 6. write the previous selector
-                cx_csr_write(CX_INDEX, prev_sel_index);
+        // 4 + 5
+        uint status = CX_READ_STATUS();
+        
+        int failure = initialize_state(status);
+        if (failure) {
+                pr_info("there was a failure all along!\n");
+                return -1;
         }
 
+        status = CX_READ_STATUS();
+        current->cx_os_state_table[cx_index].ctx_status = status;
+
+        if (cx_map[cx_id].state_info[state_id].counter == 1) {
+                cx_map[cx_id].state_info[state_id].share = GET_SHARE_TYPE(cx_share);
+                cx_map[cx_id].state_info[state_id].pid = current->pid;
+        }
+
+        // 6. write the previous selector
+        cx_csr_write(CX_INDEX, prev_sel_index);
         return cx_index;
 }
 
