@@ -99,7 +99,7 @@ int cx_init(void) {
 				cx_map[i].state_info[j].counter = 0;
 				cx_map[i].state_info[j].pid = -1;
 			}
-                cx_map[i].avail_state_ids = make_queue(num_states);
+            cx_map[i].avail_state_ids = make_queue(num_states);
          }
     }
 
