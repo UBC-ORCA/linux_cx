@@ -12,6 +12,7 @@
 #include "../../zoo/p-ext/p-ext_common.h"
 
 extern cx_entry_t cx_map[NUM_CX];
+extern opt_entry_t owning_proc_table[NUM_CX][MAX_STATE_ID];
 
 int cx_process_alloc(struct task_struct *tsk) {
 	tsk->mcx_table = kzalloc(sizeof(int) * CX_SEL_TABLE_NUM_ENTRIES, GFP_KERNEL);
@@ -50,7 +51,7 @@ int cx_init_process(struct task_struct *tsk) {
 
 int cx_init(void) {
 		
-    pr_info("Ran in part of main\n");
+	pr_info("Ran in part of main\n");
 		
 	// can't 0 initialize this because we might not have an mcx_table 
 	// allocated yet
@@ -75,8 +76,7 @@ int cx_init(void) {
     int32_t num_states = -1;
 
     for (int i = 0; i < NUM_CX; i++) {
-
-        num_states = cx_map[i].num_states;
+		num_states = cx_map[i].num_states;
 
         // stateless cxu
         if (num_states == 0) {
@@ -98,9 +98,11 @@ int cx_init(void) {
 				cx_map[i].state_info[j].share = -1;
 				cx_map[i].state_info[j].counter = 0;
 				cx_map[i].state_info[j].pid = -1;
+				owning_proc_table[i][j].tsk = NULL;
+				owning_proc_table[i][j].idx = -1;
 			}
             cx_map[i].avail_state_ids = make_queue(num_states);
-         }
+        }
     }
 
     return 0;
@@ -140,6 +142,7 @@ int update_new_tsk_cxu(struct task_struct *new, int idx, cx_sel_t cx_sel) {
 	uint cx_status = CX_READ_STATUS();
 	save_active_cxu_data(current, idx, cx_status);
 
+	cx_sel |= (1 << (CX_CXE_START_INDEX));
 	new->mcx_table[idx] = cx_sel;
 	new->cx_os_state_table[idx].data = kzalloc(sizeof(int) * MAX_STATE_SIZE, GFP_KERNEL);
 	if (!new->cx_os_state_table[idx].data) {
@@ -278,6 +281,13 @@ int cx_close(struct task_struct *tsk, int cx_sel)
 
 		BUG_ON(cx_map[cx_id].state_info[state_id].counter < 0);
 		BUG_ON(tsk->cx_os_state_table[cx_sel].counter < 0);
+		
+		// clear the owning process table for this cxu_id
+		if (!GET_CX_CXE(tsk->mcx_table[cx_sel])) {
+			owning_proc_table[cx_id][state_id].tsk = NULL;
+			owning_proc_table[cx_id][state_id].idx = -1;
+		}
+
 		// clear the table
 		tsk->mcx_table[cx_sel] = CX_INVALID_SELECTOR;
 
@@ -321,12 +331,13 @@ void exit_cx(struct task_struct *tsk) {
 	// Free state
 	if (tsk->mcx_table) {
 		for (int i = 1; i < CX_SEL_TABLE_NUM_ENTRIES; i++) {
-			if (tsk->mcx_table[i] != CX_INVALID_SELECTOR && 
-			    tsk->mcx_table[i] != 0) {
-				pr_info("Freeing cx_index: %d, %08x\n", i, tsk->mcx_table[i]);
-				for (int j = 0; j < tsk->cx_os_state_table[i].counter; j++) {
-					cx_close(tsk, i);
-				}
+			if (tsk->mcx_table[i] == CX_INVALID_SELECTOR || 
+			    tsk->mcx_table[i] == 0) {
+				continue;
+			}
+			pr_info("Freeing cx_index: %d, %08x\n", i, tsk->mcx_table[i]);
+			for (int j = 0; j < tsk->cx_os_state_table[i].counter; j++) {
+				cx_close(tsk, i);
 			}
 		}
 	}
@@ -376,84 +387,24 @@ int initialize_state(uint status)
 int cx_context_save(struct task_struct *tsk) {
     if (tsk->mcx_table == NULL) {
         pr_info("mcx table is null (save)\n");
+		BUG_ON(1);
     }
 
-	// Save the cx_index
-    cx_sel_t cx_sel_index = cx_csr_read(CX_INDEX);
-    tsk->cx_index = cx_sel_index;
+    tsk->cx_index = csr_read(CX_INDEX);
+    tsk->cx_status = csr_read(CX_STATUS);
 
-	int cx_error = cx_csr_read(CX_STATUS);
-    tsk->cx_status = cx_error;
-
-    for (int i = 1; i < CX_SEL_TABLE_NUM_ENTRIES; i++) {
-        
-		// save the state data
-		if (GET_CX_CXE(tsk->mcx_table[i]) != 0) {
-			continue;
-		}
-
-		// No data to save for stateless cxs
-		if (cx_map[GET_CX_ID(tsk->mcx_table[i])].num_states == 0) {
-			continue;
-		}
-
-		// write the index to be saved
-		cx_csr_write(CX_INDEX, i);
-
-		uint cx_status = CX_READ_STATUS();
-		save_active_cxu_data(tsk, i, cx_status);
-
-		// set the state context back to its initial state
-		int failure = initialize_state(cx_status);
-
-		if (failure) {
-			pr_info("There was a failure!\n");
-			return -1;
-		}
-    }
-
-    cx_csr_write(CX_INDEX, tsk->cx_index);
     return 0;
 }
 
 int cx_context_restore(struct task_struct *tsk) {
 	if (tsk->mcx_table == NULL) {
 		pr_info("mcx table is null (restore)\n");
+		BUG_ON(1);
 	}
 
-	// 1. Restore error
 	csr_write(CX_STATUS, tsk->cx_status);
-
-	// 2. Restore mcx_table
 	csr_write(MCX_TABLE, &tsk->mcx_table[0]);
-
-	// 3. Restore state information
-	for (int i = 1; i < CX_SEL_TABLE_NUM_ENTRIES; i++) {
-
-		// ignore table indicies that aren't occupied, and only save dirty states
-		if (GET_CX_CXE(tsk->mcx_table[i]) != 0) {
-			continue;
-		}
-
-		// Stateless cxs don't need to be restored
-		if (cx_map[GET_CX_ID(tsk->mcx_table[i])].num_states == 0) {
-			continue;
-		}
-
-		// Write the index to be restored
-		cx_csr_write( CX_INDEX,  i );
-
-		// Restore state
-		copy_state_from_os( i, tsk );
-
-		// Restoring status word + setting to clean
-		cx_stctxs_t cx_stctxs = {.idx = tsk->cx_os_state_table[i].ctx_status};
-		tsk->cx_os_state_table[i].ctx_status = cx_stctxs.idx;
-		CX_WRITE_STATUS(cx_stctxs.idx);
-	}
-
-	// 4. Restore index
-	cx_csr_write( CX_INDEX, tsk->cx_index );
+	csr_write(CX_INDEX, tsk->cx_index );
 
 	return 0;
 }

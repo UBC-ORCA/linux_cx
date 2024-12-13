@@ -218,6 +218,8 @@ EXPORT_SYMBOL(init_task);
 cx_entry_t cx_map[NUM_CX];
 EXPORT_SYMBOL(cx_map);
 
+opt_entry_t owning_proc_table[NUM_CX][MAX_STATE_ID];
+EXPORT_SYMBOL(owning_proc_table);
 /*
  * Initial thread structure. Alignment of this is handled by a special
  * linker map entry.
