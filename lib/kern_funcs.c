@@ -126,7 +126,7 @@ void copy_state_from_os( uint index, struct task_struct *tsk )
 static void save_active_cxu_data(struct task_struct *tsk, uint cx_index, uint cx_status) {
 
 	// Don't need to save data if it's not dirty
-	if (GET_CX_STATUS(cx_status) != CX_DIRTY) {
+	if (GET_CX_DATA_CLEAN(cx_status) != CX_DIRTY) {
 		return;
 	}
 
@@ -363,24 +363,40 @@ void exit_cx(struct task_struct *tsk) {
 int initialize_state(uint status) 
 {
     // 4. Read the state to get the state_size
-    uint state_size = GET_CX_STATE_SIZE(status);
+
+    cx_stctxs_t stat = { .idx = status };
+    uint state_size = stat.sel.state_size;
 
     if (state_size > 1023 || state_size < 0) {
         return 1;
     }
 
     // 5. Set the CXU to initial state
-    uint sw_init = GET_CX_INITIALIZER(status);
 
-    CX_WRITE_STATUS(CX_INITIAL);
+    stat.sel.dc = CX_PRECLEAN;
+    stat.sel.R = 1;
+    CX_WRITE_STATUS(stat.idx);
 
-    // hw required to set to dirty after init, while sw does it explicitly
-    if (sw_init) {
+    int cntr = 0;
+    stat.idx = CX_READ_STATUS();
+    while (GET_CX_RESET(status)) {
+        if (cntr > 1000) {
+            pr_info("Took forever and a day to initialize state context\n");
+            BUG_ON(1);
+        }
+        stat.idx = CX_READ_STATUS();
+        cntr++;
+    }
+
+    // With R=0, there could still be software initialization that needs
+    // to be done.
+    if (stat.sel.dc == CX_PRECLEAN) {
         for (int i = 0; i < state_size; i++) {
             CX_WRITE_STATE(i, 0);
         }
-        CX_WRITE_STATUS(CX_DIRTY);
     }
+    stat.sel.dc = CX_DIRTY;
+    CX_WRITE_STATUS(stat.idx);
     return 0;
 }
 

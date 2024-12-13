@@ -50,7 +50,7 @@ static int is_valid_counter(cx_id_t cx_id, state_id_t state_id)
 	if (/* counter == INT32_MAX || */ counter < 0) {
 		return false;
 
-		// stateful + counter out of range
+	// stateful + counter out of range
 	} else if (cx_map[cx_id].num_states > 0 && counter >= cx_map[cx_id].num_states) {
 		return false;
 	}
@@ -106,7 +106,7 @@ int first_use_exception()
 		BUG_ON(GET_CX_CXE(owning_task->mcx_table[owning_idx]) == 1);
 
 		// Storing status word + setting to clean
-		cx_stctxs_B.sel.cs = CX_CLEAN;
+		cx_stctxs_B.sel.dc = CX_CLEAN;
 		owning_task->cx_os_state_table[owning_idx].ctx_status =
 			cx_stctxs_B.idx;
 
@@ -124,7 +124,7 @@ int first_use_exception()
 
 	// Restore state information + Update state context status information
 	// Only if this data has been saved before e.g., if we aren't coming from a cx_open
-	if (GET_CX_STATUS(current->cx_os_state_table[cx_index_A].ctx_status) > CX_OFF) {
+	if (GET_CX_DATA_CLEAN(current->cx_os_state_table[cx_index_A].ctx_status) > CX_OFF) {
 		copy_state_from_os(cx_index_A, current);
 		CX_WRITE_STATUS(current->cx_os_state_table[cx_index_A].ctx_status);
 	}
