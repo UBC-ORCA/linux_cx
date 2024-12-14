@@ -10,6 +10,7 @@
 #include "../../zoo/muldiv/muldiv_common.h"
 #include "../../zoo/addsub/addsub_common.h"
 #include "../../zoo/p-ext/p-ext_common.h"
+#include "../../zoo/vector/vector_common.h"
 
 extern cx_entry_t cx_map[NUM_CX];
 extern opt_entry_t owning_proc_table[NUM_CX][MAX_STATE_ID];
@@ -67,11 +68,13 @@ int cx_init(void) {
     cx_map[1].cx_guid = CX_GUID_ADDSUB;
     cx_map[2].cx_guid = CX_GUID_MULACC;
     cx_map[3].cx_guid = CX_GUID_PEXT;
+    cx_map[4].cx_guid = CX_GUID_VECTOR;
 
     cx_map[0].num_states = CX_MULDIV_NUM_STATES;
     cx_map[1].num_states = CX_ADDSUB_NUM_STATES;
     cx_map[2].num_states = CX_MULACC_NUM_STATES;
     cx_map[3].num_states = CX_PEXT_NUM_STATES;
+    cx_map[4].num_states = CX_VECTOR_NUM_STATES;
 
     int32_t num_states = -1;
 
@@ -363,10 +366,8 @@ void exit_cx(struct task_struct *tsk) {
 int initialize_state(uint status) 
 {
     // 4. Read the state to get the state_size
-
     cx_stctxs_t stat = { .idx = status };
     uint state_size = stat.sel.state_size;
-
     if (state_size > 1023 || state_size < 0) {
         return 1;
     }

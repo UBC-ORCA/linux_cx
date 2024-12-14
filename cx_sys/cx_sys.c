@@ -78,7 +78,12 @@ int first_use_exception()
 		BUG_ON(1);
 	}
 	// Save the current state index
-	uint cx_index_A = cx_csr_read(CX_INDEX);
+	int cx_index_A = cx_csr_read(CX_INDEX);
+
+    if (cx_index_A <= -1) {
+        pr_info("Active selector invalid: %d\n", cx_index_A);
+        BUG_ON(1);
+    }
 
 	// Update the mcx_table to clear cxe bit for current selector
 	// This needs to be early to prevent a double trap, which we would have
@@ -143,6 +148,7 @@ int first_use_exception()
 */
 SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 {
+    
 	if (!current->mcx_table) {
 		cx_process_alloc(current);
 		cx_init_process(current);
@@ -267,8 +273,7 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 				}
 			}
 		} else {
-			state_id = get_state_id_at_index(cx_id, cx_share,
-							 cx_share_sel);
+			state_id = get_state_id_at_index(cx_id, cx_share, cx_share_sel);
 		}
 	} else {
 		pr_info("Undefined share type\n");
@@ -304,7 +309,6 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 
 	// 4 + 5
 	uint status = CX_READ_STATUS();
-
 	int failure = initialize_state(status);
 	if (failure) {
 		pr_info("there was a failure all along!\n");
@@ -321,6 +325,9 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 
 	// 6. write the previous selector
 	cx_csr_write(CX_INDEX, prev_sel_index);
+
+    cx_sel_user_t user_sel = { .sel = {.idx = cx_index,
+                                       .iv = 0}};
 	return cx_index;
 }
 
