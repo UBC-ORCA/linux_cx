@@ -69,12 +69,14 @@ int cx_init(void) {
     cx_map[2].cx_guid = CX_GUID_MULACC;
     cx_map[3].cx_guid = CX_GUID_PEXT;
     cx_map[4].cx_guid = CX_GUID_VECTOR;
+    cx_map[5].cx_guid = CX_GUID_VECTOR;
 
     cx_map[0].num_states = CX_MULDIV_NUM_STATES;
     cx_map[1].num_states = CX_ADDSUB_NUM_STATES;
     cx_map[2].num_states = CX_MULACC_NUM_STATES;
     cx_map[3].num_states = CX_PEXT_NUM_STATES;
     cx_map[4].num_states = CX_VECTOR_NUM_STATES;
+    cx_map[5].num_states = CX_VECTOR_NUM_STATES;
 
     int32_t num_states = -1;
 
