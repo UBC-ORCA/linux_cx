@@ -34,13 +34,32 @@ static inline cx_sel_t gen_cx_sel(cx_id_t cx_id, state_id_t state_id, uint cxe,
 	return cx_sel.idx;
 }
 
-static int get_free_state(int cx_id)
+static int get_least_used_cxu_instance(cx_id_t cxu_id, cx_guid_t cx_guid) {
+    int max_used_states = cx_map[cxu_id].num_states - cx_map[cxu_id].avail_state_ids->size;
+    for (int i = cxu_id + 1; i < NUM_CX; i++) {
+        if (cx_guid == cx_map[i].cx_guid) {
+            int curr_num_used_states = cx_map[i].num_states - cx_map[i].avail_state_ids->size;
+            if (curr_num_used_states < max_used_states) {
+                cxu_id = i;
+                max_used_states = curr_num_used_states;
+            }
+        }
+    }
+    return cxu_id;
+}
+
+static cx_selidx_t get_free_state(cx_selidx_t sys_sel, cx_guid_t cx_guid)
 {
-	int state_id = front(cx_map[cx_id].avail_state_ids);
+    sys_sel.sel.cx_id = get_least_used_cxu_instance(sys_sel.sel.cx_id, cx_guid);
+    cx_id_t cxu_id = sys_sel.sel.cx_id;
+
+	int state_id = front(cx_map[cxu_id].avail_state_ids);
 	if (state_id >= 0) {
-		return state_id;
+        sys_sel.sel.state_id = state_id;
+        sys_sel.sel.version = 1;
+		return sys_sel;
 	}
-	return -1;
+	return sys_sel;
 }
 
 static int is_valid_counter(cx_id_t cx_id, state_id_t state_id)
@@ -57,18 +76,22 @@ static int is_valid_counter(cx_id_t cx_id, state_id_t state_id)
 	return true;
 }
 
-static int get_state_id_at_index(cx_id_t cx_id, cx_share_t cx_share,
+static cx_selidx_t get_state_id_at_index(cx_selidx_t sys_sel, cx_share_t cx_share,
 				 int cx_share_sel)
 {
+    cx_id_t cxu_id = sys_sel.sel.cx_id;
 	uint temp_cx_sel = current->mcx_table[cx_share_sel];
 	if (temp_cx_sel == CX_INVALID_SELECTOR) {
-		return -1;
+        return sys_sel;
 	}
 	int state_id = GET_CX_STATE(temp_cx_sel);
-	if (cx_map[cx_id].state_info[state_id].share != cx_share) {
-		return -1;
+	if (cx_map[cxu_id].state_info[state_id].share != cx_share) {
+		return sys_sel;
 	}
-	return state_id;
+    sys_sel.sel.version = 1;
+    sys_sel.sel.state_id = state_id;
+
+	return sys_sel;
 }
 
 int first_use_exception()
@@ -140,6 +163,70 @@ int first_use_exception()
 	return 0;
 }
 
+static cx_selidx_t get_least_shared_state_intra(cx_selidx_t sys_sel, cx_guid_t cx_guid) {
+    /* Should check the index.counter */
+    int lowest_share_count = 0x7FFFFFFF;
+    cx_id_t cxu_id = sys_sel.sel.cx_id;
+    for (int j = cxu_id; j < NUM_CX; j++) {
+        if (cx_map[j].cx_guid != cx_guid) {
+            continue;
+        }
+        for (int i = 0; i < cx_map[j].num_states; i++) {
+            if (cx_map[j].state_info[i].share == CX_INTRA_VIRT &&
+                cx_map[j].state_info[i].pid == current->pid) {
+                if (cx_map[j].state_info[i].counter < lowest_share_count) { 
+                    sys_sel.sel.version = 1;
+                    sys_sel.sel.state_id = i;
+                }
+            }
+        }
+    }
+    return sys_sel;
+}
+
+static cx_selidx_t get_least_shared_state_full(cx_selidx_t sys_sel, cx_guid_t cx_guid) {
+    int lowest_share_count = 0x7FFFFFFF;
+    cx_id_t cxu_id = sys_sel.sel.cx_id;
+    for (int j = cxu_id; j < NUM_CX; j++) {
+        if (cx_map[j].cx_guid != cx_guid) {
+            continue;
+        }
+        for (int i = 0; i < cx_map[j].num_states; i++) {
+            if (cx_map[j].state_info[i].share == CX_FULL_VIRT) {
+                if (cx_map[j].state_info[i].counter < lowest_share_count) {
+                    sys_sel.sel.version = 1;
+                    sys_sel.sel.state_id = i;
+                }
+            }
+        }
+    }
+    return sys_sel;
+}
+
+
+static cx_selidx_t get_least_shared_state_inter(cx_selidx_t sys_sel, cx_guid_t cx_guid) {
+    /* Should check the .counter */
+    int lowest_share_count = 0x7FFFFFFF;
+    cx_id_t cxu_id = sys_sel.sel.cx_id;
+    for (int j = cxu_id; j < NUM_CX; j++) {
+        if (cx_map[j].cx_guid != cx_guid) {
+            continue;
+        }
+        for (int i = 0; i < cx_map[cxu_id].num_states; i++) {
+            // Only share if the state is being virtualized
+            // with another, different process.
+            if (cx_map[j].state_info[i].share == CX_INTER_VIRT &&
+                cx_map[j].state_info[i].pid != current->pid) {
+                if (cx_map[j].state_info[i].counter < lowest_share_count) {
+                    sys_sel.sel.version = 1;
+                    sys_sel.sel.state_id = i;
+                }
+            }
+        }
+    }
+    return sys_sel;
+}
+
 /*
 * Allocates an index on the mcx_table.
 * Stateless cxs: in the case there is already an index allocated, increment the counter and 
@@ -157,9 +244,14 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 
 	int cx_id = -1;
 
+    // Find the first instance of the cx - may be updated to a lesser-used
+    // instance (if it exists) later in the open call.
 	for (int j = 0; j < NUM_CX; j++) {
 		if (cx_map[j].cx_guid == cx_guid) {
 			cx_id = j;
+            // We need this break here. Later, we'll continue looking through
+            // the cx_map for a better instance / state context. 
+            break;
 		}
 	}
 
@@ -206,90 +298,77 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 		cx_map[cx_id].state_info[0].counter++;
 		return cx_index;
 	}
-	// stateful cx
-	int state_id = -1;
+	// stateful cxs
+    
+    // Because the state_id can be 0, we don't know if state 0 is a valid
+    // state or not; thus, the version field will only be set if 
+    // the state is valid. 
+    cx_selidx_t sys_sel = {.sel = {.cxe = 1,
+                                   .cx_id = cx_id,
+                                   .version = 0}};
 	if (cx_share == CX_NO_VIRT) {
 		// exclusive virt type fails if there is no available state
-		state_id = get_free_state(cx_id);
-		if (is_valid_state_id(cx_id, state_id)) {
-			dequeue(cx_map[cx_id].avail_state_ids);
+		sys_sel = get_free_state(sys_sel, cx_guid);
+        
+        // Version only set in get_free_state if the state is valid
+		if (sys_sel.sel.version) {
+			dequeue(cx_map[sys_sel.sel.cx_id].avail_state_ids);
 		}
 	} else if (cx_share == CX_INTRA_VIRT) {
 		if (cx_share_sel == -1) {
 			// prioritize getting an exclusive state
-			state_id = get_free_state(cx_id);
-			if (is_valid_state_id(cx_id, state_id)) {
-				dequeue(cx_map[cx_id].avail_state_ids);
+			sys_sel = get_free_state(sys_sel, cx_guid);
+			if (sys_sel.sel.version) {
+				dequeue(cx_map[sys_sel.sel.cx_id].avail_state_ids);
 
-				// share with another state in the same process
+			// share with another state in the same process
 			} else {
-				int lowest_share_count = 0x7FFFFFFF;
-				for (int i = 0; i < cx_map[cx_id].num_states; i++) {
-					if (cx_map[cx_id].state_info[i].share == CX_INTRA_VIRT &&
-					    cx_map[cx_id].state_info[i].pid == current->pid) {
-						if (cx_map[cx_id].state_info[i].counter < lowest_share_count) { 
-                            state_id = i;
-						}
-					}
-				}
+				sys_sel = get_least_shared_state_intra(sys_sel, cx_guid);
 			}
 		} else {
-			state_id = get_state_id_at_index(cx_id, cx_share, cx_share_sel);
+			sys_sel = get_state_id_at_index(sys_sel, cx_share, cx_share_sel);
 		}
 	} else if (cx_share == CX_INTER_VIRT) {
 		if (cx_share_sel == -1) {
-			state_id = get_free_state(cx_id);
-			if (is_valid_state_id(cx_id, state_id)) {
-				dequeue(cx_map[cx_id].avail_state_ids);
-
-				// share with another state in the same process
+			sys_sel = get_free_state(sys_sel, cx_guid);
+			if (sys_sel.sel.version) {
+				dequeue(cx_map[sys_sel.sel.cx_id].avail_state_ids);
 			} else {
-				int lowest_share_count = 0x7FFFFFFF;
-				for (int i = 0; i < cx_map[cx_id].num_states; i++) {
-					// Only share if the state is being virtualized
-					// with another, different process.
-					if (cx_map[cx_id].state_info[i].share == CX_INTER_VIRT &&
-					    cx_map[cx_id].state_info[i].pid != current->pid) {
-						if (cx_map[cx_id].state_info[i].counter < lowest_share_count) {
-							state_id = i;
-						}
-					}
-				}
+				sys_sel = get_least_shared_state_inter(sys_sel, cx_guid);
 			}
 		}
 	} else if (cx_share == CX_FULL_VIRT) {
 		if (cx_share_sel == -1) {
-			state_id = get_free_state(cx_id);
-			if (is_valid_state_id(cx_id, state_id)) {
-				dequeue(cx_map[cx_id].avail_state_ids);
+			sys_sel = get_free_state(sys_sel, cx_guid);
+			if (sys_sel.sel.version) {
+				dequeue(cx_map[sys_sel.sel.cx_id].avail_state_ids);
 			} else {
-				int lowest_share_count = 0x7FFFFFFF;
-				for (int i = 0; i < cx_map[cx_id].num_states; i++) {
-					if (cx_map[cx_id].state_info[i].share == CX_FULL_VIRT) {
-						if (cx_map[cx_id].state_info[i].counter < lowest_share_count) {
-							state_id = i;
-						}
-					}
-				}
+				sys_sel = get_least_shared_state_full(sys_sel, cx_guid);
 			}
 		} else {
-			state_id = get_state_id_at_index(cx_id, cx_share, cx_share_sel);
+			sys_sel = get_state_id_at_index(sys_sel, cx_share, cx_share_sel);
 		}
 	} else {
 		pr_info("Undefined share type\n");
 		return -1;
 	}
-	if (state_id >= 0) {
+	if (sys_sel.sel.version > 0) {
 		dequeue(current->cx_table_avail_indices);
 	}
 	// task_unlock(current);
-	if (state_id < 0) {
+	if (sys_sel.sel.version <= 0) {
 		return -1;
 	}
+    int state_id = sys_sel.sel.state_id;
+
+    // Again, cx_id could have changed in the case that there are multiple instances 
+    // of an accelerator.
+    cx_id = sys_sel.sel.cx_id;
+	cx_sel = sys_sel.idx;
+
 	cx_map[cx_id].state_info[state_id].counter++;
 	current->cx_os_state_table[cx_index].counter++;
 
-	cx_sel = gen_cx_sel(cx_id, state_id, 1, CX_VERSION);
 	current->mcx_table[cx_index] = cx_sel;
 
 	// 1. Update os information
@@ -320,6 +399,8 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 
 	if (cx_map[cx_id].state_info[state_id].counter == 1) {
 		cx_map[cx_id].state_info[state_id].share = GET_SHARE_TYPE(cx_share);
+        // TODO: This is broken for inter virt. Multiple processes can own 
+        // the selector.
 		cx_map[cx_id].state_info[state_id].pid = current->pid;
 	}
 
@@ -328,7 +409,7 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 
     cx_sel_user_t user_sel = { .sel = {.idx = cx_index,
                                        .iv = 0}};
-	return cx_index;
+	return user_sel.idx;
 }
 
 /*
