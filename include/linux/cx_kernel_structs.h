@@ -2,8 +2,14 @@
 #define CX_KERN_STRUCTS_H
 
 #include "list.h"
+#include <linux/sched.h>
 
 #include "../../../include/ci_kern.h"
+
+typedef struct opt_entry_t {
+    struct task_struct *tsk;
+    int v_id;
+} opt_entry_t;
 
 typedef struct val_t {
     int val;
@@ -24,16 +30,17 @@ typedef struct cxu_info_t {
     int num_states;
 } cxu_info_t;
 
-// Used per process to store state information. 
-
+// Used per process to store state information.
 typedef struct cx_virt_data_t {
     cxu_sctx_t status;
     uint *data;
+    int virt_id; 
+    struct list_head v_contexts;
 } cx_virt_data_t;
 
 typedef struct state_t {
-    cx_virt_data_t v_state;
-    uint v_id[2]; // 128 bits - stores which v_ids are in use
+    struct list_head v_state;
+    uint v_id[2]; // 64 bits - stores which v_ids are in use
 } state_t;
 
 typedef struct cxu_t {

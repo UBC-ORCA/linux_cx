@@ -176,7 +176,7 @@ asmlinkage __visible __trap_section void do_trap_insn_illegal(struct pt_regs *re
 	u32 insn = (u32)regs->badaddr;
 	uint opc = insn & ((1<<7)-1);
 	if (opc == CX_REG_TYPE || opc == CX_IMM_TYPE || opc == CX_FLEX_TYPE) {
-		pr_info("first use insn opcode: %08x\n", insn);
+		// pr_info("first use insn opcode: %08x\n", insn);
 		do_trap_first_cx_use(regs);
 		return;
 	}
@@ -185,7 +185,7 @@ asmlinkage __visible __trap_section void do_trap_insn_illegal(struct pt_regs *re
 	uint func3 = GET_BITS(insn, 12, 3);
 	uint csr_id = GET_BITS(insn, 20, 12);
 	if (opc == 0b1110011 && csr_id == 0x011 && func3 == 1) {
-		pr_info("write to CSR: %08x\n", insn);
+		// pr_info("write to CSR: %08x\n", insn);
 		do_trap_first_cx_use(regs);
 		return;
 	}
