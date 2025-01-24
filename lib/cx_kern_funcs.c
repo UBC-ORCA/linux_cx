@@ -92,6 +92,10 @@ static bool is_vstate_free(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id
     return true;
 }
 
+static bool check_vstate_active(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id, cx_vstate_id_t v_id) {
+    return GET_BITS(tsk->cxu_data[cxu_id].state[state_id].v_id[v_id / 32], v_id % 32, 1);
+}
+
 static void set_cx_en_csrs(void) {
     // Can't just use a for loop (without some kind of fancy macros) - need to be explicit
     csr_write(MCX_ENABLE0, 0xFFFFFFFF);
@@ -195,8 +199,9 @@ void cx_init(void)
         }
     }
 
-    cx_csr_write( CX_SELECTOR_USER, CX_LEGACY );
-    cx_csr_write( CX_STATUS, 0 );
+    csr_write( CX_SELECTOR_USER, CX_LEGACY );
+    csr_write( CX_PREV_SELECTOR_USER, CX_LEGACY );
+    csr_write( CX_STATUS, 0 );
 }
 
 void cx_alloc_process_structs(struct task_struct *tsk) {
@@ -342,7 +347,6 @@ static void restore_ctx_to_process(cx_virt_data_t *virt_data) {
     // TODO: This is not robust, and it's quite possible that we're not 0'ing values from 
     // the previous state.
     for (int i = 0; i < size; i++) {
-        // pr_info("status: %d\n", virt_data->data[i]);
         CX_WRITE_STATE(i, virt_data->data[i]);
     }
     status.sel.dc = CX_CLEAN;
@@ -352,11 +356,13 @@ static void restore_ctx_to_process(cx_virt_data_t *virt_data) {
 void cx_context_save(struct task_struct *tsk) {
     tsk->ucx_sel = csr_read(CX_SELECTOR_USER);
     tsk->cx_status = csr_read(CX_STATUS);
-    // save_cx_en_csrs(tsk);
+    save_cx_en_csrs(tsk);
+    clear_cx_en_csrs();
 }
 
 void cx_context_restore(struct task_struct *tsk) {
-    // restore_cx_en_csrs(tsk);
+    // TODO: We should be RESTORING here, not clearing. Clearing is for the hack (not setting enable)
+    restore_cx_en_csrs(tsk);
     csr_write(CX_SELECTOR_USER, tsk->ucx_sel);
     csr_write(CX_STATUS, tsk->cx_status);
 }
@@ -381,7 +387,7 @@ cx_virt_data_t* alloc_vstate(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_
     }
     vdata->status = 0;
     vdata->virt_id = virt_id;
-    list_add(&vdata->v_contexts, &current->cxu_data[cxu_id].state[state_id].v_state);
+    list_add(&vdata->v_contexts, &tsk->cxu_data[cxu_id].state[state_id].v_state);
 
     return vdata;
 }
@@ -394,7 +400,6 @@ static cx_idx_t try_alloc_state_exclusive(cxu_id_t cxu_id, cx_virt_t cx_virt) {
 
         // Counting how many processes are using this state context
         cxu[cxu_id].state_info[state_id].counter += 1;
-
         cx_virt_data_t *vdata = alloc_vstate(current, cxu_id, state_id, virt_id);
         if (!vdata) {
             cx_idx_t sel = {.idx = -1};
@@ -408,11 +413,45 @@ static cx_idx_t try_alloc_state_exclusive(cxu_id_t cxu_id, cx_virt_t cx_virt) {
     return sel;
 }
 
+static cx_idx_t try_intra_virtualize_sel(cxu_id_t cxu_id, cx_state_id_t state_id) {
+    cx_vstate_id_t virt_id = get_free_vstate(cxu_id, state_id);
+    if (virt_id >= 0) {
+        cx_virt_data_t *vdata = alloc_vstate(current, cxu_id, state_id, virt_id);
+        if (!vdata) {
+            cx_idx_t sel = {.idx = -1};
+            return sel;
+        }
+        return gen_cx_idx(cxu_id, state_id, virt_id);
+    }
+    cx_idx_t sel = {.idx = -1};
+    return sel;
+}
+
 static cx_idx_t try_alloc_state_intra(cxu_id_t cxu_id, cx_virt_t cx_virt) {
     // TODO: get the least used state context
     for (int i = 0; i < cxu[cxu_id].num_states; i++) {
         if (!is_vstate_free(current, cxu_id, i) &&
             cxu[cxu_id].state_info[i].virt == CX_INTRA_VIRT) {
+            cx_vstate_id_t virt_id = get_free_vstate(cxu_id, i);
+            if (virt_id >= 0) {
+                cx_virt_data_t *vdata = alloc_vstate(current, cxu_id, i, virt_id);
+                if (!vdata) {
+                    cx_idx_t sel = {.idx = -1};
+                    return sel;
+                }
+                return gen_cx_idx(cxu_id, i, virt_id);
+            }
+        }
+    }
+    cx_idx_t sel = {.idx = -1};
+    return sel;
+}
+
+static cx_idx_t try_alloc_state_inter(cxu_id_t cxu_id, cx_virt_t cx_virt) {
+    // TODO: get the least used state context
+    for (int i = 0; i < cxu[cxu_id].num_states; i++) {
+        if (is_vstate_free(current, cxu_id, i) &&
+            cxu[cxu_id].state_info[i].virt == CX_INTER_VIRT) {
             cx_vstate_id_t virt_id = get_free_vstate(cxu_id, i);
             if (virt_id >= 0) {
                 cx_virt_data_t *vdata = alloc_vstate(current, cxu_id, i, virt_id);
@@ -438,7 +477,7 @@ static void free_state(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t s
 static void free_vstate(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id, cx_vstate_id_t virt_id) {
     cx_virt_data_t *vdata = get_virtual_state(&tsk->cxu_data[cxu_id].state[state_id], virt_id);
     if (!vdata) {
-        pr_info("Attempted to free vstate that doesn't exist\n");
+        pr_info("Attempted to free vstate that doesn't exist: %d, %d, %d\n", cxu_id, state_id, virt_id);
     }
 
     if (vdata->data != NULL) {
@@ -491,7 +530,8 @@ int init_state(uint status)
     return 0;
 }
 
-int cx_close(struct task_struct *tsk, int cx_sel) {
+int cx_close(struct task_struct *tsk, cx_select_t cx_sel) {
+    // pr_info("cx_close closing %08x\n", cx_sel);
     // Have to make sure that the selector in question is allocated to the 
     // process.
     cxu_id_t cxu_id = CX_GET_CXU_ID(cx_sel);
@@ -511,8 +551,8 @@ int cx_close(struct task_struct *tsk, int cx_sel) {
 
     // Trapping when bit is set high (not enabled in the task)
     // Not trapping when bit is low (enabled in task)
-    bool mcx_enable_bit = get_task_enable_bit(tsk, cxu_id, state_id);
-    if (!mcx_enable_bit) {
+    bool task_enable_bit = get_task_enable_bit(tsk, cxu_id, state_id);
+    if (!task_enable_bit) {
         return 0;
     }
 
@@ -538,10 +578,10 @@ int cx_close(struct task_struct *tsk, int cx_sel) {
         free_state(tsk, cxu_id, state_id);
     }
 
-    // TODO: something is wrong here
-    owning_process_table[cxu_id][state_id].tsk = NULL;
-    owning_process_table[cxu_id][state_id].v_id = -1;
-
+    if (owning_process_table[cxu_id][state_id].tsk == current) {
+        owning_process_table[cxu_id][state_id].tsk = NULL;
+        owning_process_table[cxu_id][state_id].v_id = -1;
+    }
     return 0;
 }
 
@@ -555,12 +595,14 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
         clear_cx_en_csrs();
         clear_cx_permission();
         csr_write(CX_SELECTOR_USER, CX_LEGACY);
+        csr_write(CX_PREV_SELECTOR_USER, CX_LEGACY);
     }
 
     int cxu_id = -1;
     for (int i = 0; i < NUM_CXUS; i++) {
         if (cxu[i].cx_guid[0] == cx_guid) {
             cxu_id = i;
+            break;
         }
     }
 
@@ -600,21 +642,18 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
             cx_state_id_t user_state_id = cx_virt_idx.sel.state_id;
             if (cxu[cxu_id].state_info[user_state_id].virt != cx_virt) {
                 return -1;
+            } else {
+                sel = try_intra_virtualize_sel(cxu_id, user_state_id);
             }
-            // TODO: Share specified selector
         }
     }
     else if (cx_virt == CX_INTER_VIRT) {
         // Try and get an exclusive virt type
-        if (cx_virt_idx.idx == -1) {
-            sel = try_alloc_state_exclusive(cxu_id, cx_virt);
-        } else {
-            cx_state_id_t user_state_id = cx_virt_idx.sel.state_id;
-            if (cxu[cxu_id].state_info[user_state_id].virt != cx_virt) {
-                return -1;
-            }
-            // add_active_pid(cxu_id, state_id);
+        sel = try_alloc_state_exclusive(cxu_id, cx_virt);
+        if (sel.idx < 0) {
+            sel = try_alloc_state_inter(cxu_id, cx_virt);
         }
+        // add_active_pid(cxu_id, state_id);
     } else {
         pr_info("Undefined virt type\n");
         return -1;
@@ -630,20 +669,25 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
     cx_vstate_id_t virt_id = sel.sel.v_state_id;
 
     // Save the old sel and reset the CXU state for the new index
-    cx_sel_t prev_sel = csr_read(CX_SELECTOR_USER);
-    // cxu_id_t prev_cxu_id = CX_GET_CXU_ID(prev_sel);
-    // cx_state_id_t prev_state_id = CX_GET_STATE_ID(prev_sel);
-    // cx_vstate_id_t prev_virt_id = CX_GET_VIRT_STATE_ID(prev_sel);
+    cx_sel_t prev_sel = csr_read( CX_SELECTOR_USER );
 
     struct task_struct *prev_task = owning_process_table[cxu_id][state_id].tsk;
     set_mcx_enable(cxu_id, state_id);
-    // pr_info("cx_open trap: %d, %d, %d, %d, %08x\n", cxu_id, state_id, owning_process_table[cxu_id][state_id].v_id, virt_id, sel.idx);
-    if (owning_process_table[cxu_id][state_id].tsk != NULL) {
+
+    if (prev_task != NULL &&
+        owning_process_table[cxu_id][state_id].v_id >= 0) {
         csr_write( CX_SELECTOR_USER, gen_cx_sel(cxu_id, state_id, owning_process_table[cxu_id][state_id].v_id) );
         save_ctx_to_process(prev_task, cxu_id, state_id, owning_process_table[cxu_id][state_id].v_id);
+        clear_task_cx_permission(prev_task, cxu_id, state_id);
     }
 
+    owning_process_table[cxu_id][state_id].tsk = current;
+    owning_process_table[cxu_id][state_id].v_id = virt_id;
+    set_task_cx_permission(current, cxu_id, state_id);
+
     csr_write( CX_SELECTOR_USER, sel.idx );
+    csr_write( CX_PREV_SELECTOR_USER, sel.idx );
+
 	uint status = CX_READ_STATUS();
     int retval = init_state(status);
     save_ctx_to_process(current, cxu_id, state_id, virt_id);
@@ -653,61 +697,114 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
         return -1;
     }
 
-    // Counting how many processes are using this state context
+    // clear_mcx_enable(cxu_id, state_id);
     csr_write(CX_SELECTOR_USER, prev_sel);
 
-    // if (prev_sel != CX_INVALID_SELECTOR && 
-    //     prev_sel != CX_LEGACY && 
-    //     prev_cxu_id == cxu_id && 
-    //     prev_state_id == state_id &&
-    //     owning_process_table[cxu_id][state_id].tsk != NULL
-    //     ) {
-    //     cx_virt_data_t *vdata = get_virtual_state(&current->cxu_data[cxu_id].state[state_id], prev_virt_id);
-    //     if (!vdata) {
-    //         pr_info("can't find vdata for cx_open restore\n");
-    //     }
-    //     restore_ctx_to_process(vdata);
-    // } else {
-    owning_process_table[cxu_id][state_id].tsk = current;
-    owning_process_table[cxu_id][state_id].v_id = virt_id;
-    // }
-
-    // if (owning_process_table[cxu_id][state_id].tsk != current) {
-    clear_mcx_enable(cxu_id, state_id);
-    // }
-
-    set_task_cx_permission(current, cxu_id, state_id);
     return sel.idx;
+}
+
+static void free_all_v_states(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id) {
+
+    state_t *head = &tsk->cxu_data[cxu_id].state[state_id];
+    cx_virt_data_t *vdata;
+
+    redo:
+    list_for_each_entry(vdata, &head->v_state, v_contexts) {
+        list_del(&vdata->v_contexts);
+        kfree(vdata);
+        goto redo;
+    }
+}
+
+static void cx_context_copy(cx_virt_data_t *new_vstate, cx_virt_data_t *prev_vstate) {
+    new_vstate->status = prev_vstate->status;
+    new_vstate->virt_id = prev_vstate->virt_id;
+    for (int i = 0; i < GET_CX_STATE_SIZE(new_vstate->status); i++) {
+        new_vstate->data[i] = prev_vstate->data[i];
+    }
 }
 
 // TODO: Get a real vstate
 int cx_copy_process_data(struct task_struct *new) {
+
+    // TODO: gotta allocate some stuff
+
+    // Full fail
+
+    current->ucx_sel = cx_csr_read(CX_SELECTOR_USER);
+
+    for (int i = 0; i < MAX_NUM_CXUS; i++) {
+        for (int j = 0; j < MAX_NUM_STATES; j++) {
+            cxu_id_t cxu_id = i;
+            cx_state_id_t state_id = j;
+
+            if (!is_vstate_free(current, cxu_id, state_id)) {
+
+                if (cxu[cxu_id].state_info[state_id].virt == CX_NO_VIRT ||
+                    cxu[cxu_id].state_info[state_id].virt == CX_INTRA_VIRT ) {
+                    pr_info("Attempting to fork a virtualization type that does not allow forking\n");
+                    return -1;
+                }
+
+                // Saving virtual state contexts that may have dirty data e.g., currently
+                // present in the state contexts
+                if (owning_process_table[cxu_id][state_id].v_id != -1 &&
+                    owning_process_table[cxu_id][state_id].tsk == current) {
+
+                    cx_vstate_id_t virt_id = owning_process_table[cxu_id][state_id].v_id;
+                    // Not sure if we need to set the permission here - it *should* already be set
+                    set_task_cx_permission(current, cxu_id, state_id);
+                    set_mcx_enable(cxu_id, state_id);
+
+                    cx_csr_write( CX_SELECTOR_USER, gen_cx_sel(cxu_id, state_id, virt_id) );
+                    save_ctx_to_process(current, cxu_id, state_id, virt_id);
+                    clear_mcx_enable(cxu_id, state_id);
+
+                    // clear_mcx_enable(cxu_id, state_id);
+                    owning_process_table[cxu_id][state_id].tsk = current;
+                    owning_process_table[cxu_id][state_id].v_id = virt_id;
+                }
+
+                // copying saved virtual state contexts
+                for (int k = 0; k < 64; k++) {
+                    cx_vstate_id_t virt_id = k;
+
+                    // only copy if this vstate has data allocated
+                    bool t = check_vstate_active(current, cxu_id, state_id, virt_id);
+                    if (!t) {
+                        continue;
+                    }
+
+                    cx_virt_data_t *vstate = alloc_vstate(new, cxu_id, state_id, virt_id);
+                    if (!vstate) {
+                        pr_info("couldn't allocate new vstate on fork\n");
+                        return -1;
+                    }
+
+                    cx_virt_data_t *prev_vstate = get_virtual_state(&current->cxu_data[cxu_id].state[state_id], virt_id);
+                    if (!prev_vstate) {
+                        pr_info("couldn't find vstate on fork; cxu: %d, state: %d, vstate: %d\n", cxu_id, state_id, virt_id);
+                        return -1;
+                    }
+
+                    new->cxu_data[cxu_id].state[state_id].v_id[virt_id / 2] |= 1 << (virt_id % 32);
+                    cxu[cxu_id].state_info[state_id].counter += 1;
+
+                    cx_context_copy(vstate, prev_vstate);
+                }
+            }
+
+            for (int k = 0; k < VSTATE_WORDS; k++) {
+                new->cxu_data[cxu_id].state[state_id].v_id[k] = current->cxu_data[cxu_id].state[state_id].v_id[k];
+            }
+        }
+    }
+
+    cx_csr_write(CX_SELECTOR_USER, current->ucx_sel);
+
+    // TODO: Downgrade the selectors from exclusive to shared
     return 0;
 }
-//     current->ucx_sel = cx_csr_read(CX_SELECTOR_USER);
-//     for (int i = 0; i < 8; i++) {
-//         new->cx_permission[i] = current->cx_permission[i];
-//     }
-//     for (int i = 0; i < MAX_NUM_CXUS; i++) {
-//         for (int j = 0; j < MAX_NUM_STATES; j++) {
-//             if (current->cxu_data[i].state[j].v_state.data != NULL) {
-//                 new->cxu_data[i].state[j].v_state.data = kzalloc(sizeof(uint) * MAX_STATE_SIZE, GFP_KERNEL);
-//                 cxu[i].state_info[j].counter += 1;
-                
-//                 cx_sel_t cx_sel = gen_cx_sel(i, j, 0);
-//                 cx_csr_write(CX_SELECTOR_USER, cx_sel);
-//                 save_ctx_to_process(new, i, j);
-//                 for (int k = 0; k < VSTATE_WORDS; k++) {
-//                     new->cxu_data[i].state[j].v_id[k] = current->cxu_data[i].state[j].v_id[k];
-//                 }
-//             }
-//         }
-//     }
-//     cx_csr_write(CX_SELECTOR_USER, current->ucx_sel);
-
-//     // TODO: Downgrade the selectors from exclusive to shared
-//     return 0;
-// }
 
 // We should check to make sure that the active selector is valid. 
 void cx_first_use(void) {
@@ -721,34 +818,44 @@ void cx_first_use(void) {
     }
 
     // Save the current state index
-    cx_select_t prev_sel = csr_read(CX_SELECTOR_USER);
-    cxu_id_t cxu_id = CX_GET_CXU_ID(prev_sel);
-    cx_state_id_t state_id = CX_GET_STATE_ID(prev_sel);
+    cx_select_t prev_sel = csr_read(CX_PREV_SELECTOR_USER);
+    cxu_id_t prev_cxu_id = CX_GET_CXU_ID(prev_sel);
+    cx_state_id_t prev_state_id = CX_GET_STATE_ID(prev_sel);
     cx_vstate_id_t prev_virt_id = CX_GET_VIRT_STATE_ID(prev_sel);
-    
+
+    cx_select_t sel = csr_read(CX_SELECTOR_USER);
+    cxu_id_t cxu_id = CX_GET_CXU_ID(sel);
+    cx_state_id_t state_id = CX_GET_STATE_ID(sel);
+    cx_vstate_id_t virt_id = CX_GET_VIRT_STATE_ID(sel);
+
+    if (prev_sel > 0 &&
+        cxu[prev_cxu_id].num_states != 0 &&
+        owning_process_table[prev_cxu_id][prev_state_id].tsk != NULL) {
+        // context save to the prev process
+        struct task_struct *prev_task = owning_process_table[prev_cxu_id][prev_state_id].tsk;
+        csr_write(CX_SELECTOR_USER, prev_sel);
+        save_ctx_to_process(prev_task, prev_cxu_id, prev_state_id, owning_process_table[prev_cxu_id][prev_state_id].v_id);
+    }
+
+    if (cxu[cxu_id].num_states != 0 &&
+        owning_process_table[cxu_id][state_id].tsk != NULL) {
+        clear_task_cx_permission(owning_process_table[cxu_id][state_id].tsk, cxu_id, state_id);
+    }
+
+    csr_write(CX_PREV_SELECTOR_USER, sel);
+    csr_write(CX_SELECTOR_USER, sel);
+
+    set_task_cx_permission(current, cxu_id, state_id);
+    set_mcx_enable(cxu_id, state_id);
+
     if (cxu[cxu_id].num_states == 0) {
-        pr_info("stateless\n");
-        set_task_cx_permission(current, cxu_id, state_id);
-        set_mcx_enable(cxu_id, state_id);
         return;
     }
 
-    struct task_struct *prev_task = owning_process_table[cxu_id][state_id].tsk;
-    if (prev_task != NULL) {
-        // context save to the prev process
-        // pr_info("sel: %08x, v_id: %d, prev_v_id: %d\n", prev_sel, owning_process_table[cxu_id][state_id].v_id, prev_virt_id);
-        save_ctx_to_process(prev_task, cxu_id, state_id, owning_process_table[cxu_id][state_id].v_id);
-        clear_task_cx_permission(prev_task, cxu_id, state_id);
-    }
-
-    // pr_info("owning proc: %d, curr proc: %d\n", owning_process_table[cxu_id][state_id].tsk, current->pid);
-
     // restore current process' data blob
     owning_process_table[cxu_id][state_id].tsk = current;
-    owning_process_table[cxu_id][state_id].v_id = prev_virt_id;
-    set_task_cx_permission(current, cxu_id, state_id);
-    set_mcx_enable(cxu_id, state_id);
-    cx_virt_data_t *vdata = get_virtual_state(&current->cxu_data[cxu_id].state[state_id], prev_virt_id);
+    owning_process_table[cxu_id][state_id].v_id = virt_id;
+    cx_virt_data_t *vdata = get_virtual_state(&current->cxu_data[cxu_id].state[state_id], virt_id);
     if (!vdata) {
         pr_info("can't find vdata in first use restore\n");
         return;
@@ -769,8 +876,11 @@ void exit_cx(struct task_struct *tsk) {
                 uint vid_clear = is_vstate_free(tsk, cxu_id, state_id);
                 uint mcx_enable_bit = GET_BITS(mcx_enable, j, 1);
                 if (!vid_clear && mcx_enable_bit) {
-                    // pr_info("counter: %d\n", cxu[cxu_id].state_info[state_id].counter);
+                    pr_info("freeing state from exit_cx: %d, %d, %d\n", cxu_id, state_id, j);
+
+                    free_all_v_states(tsk, cxu_id, state_id);
                     free_vstates(tsk, cxu_id, state_id);
+
                     cxu[cxu_id].state_info[state_id].counter--;
                     if (cxu[cxu_id].state_info[state_id].counter == 0) {
                         free_state(tsk, cxu_id, state_id);
@@ -795,4 +905,5 @@ void exit_cx(struct task_struct *tsk) {
 
     clear_cx_en_csrs();
     csr_write(CX_SELECTOR_USER, CX_LEGACY);
+    csr_write(CX_PREV_SELECTOR_USER, CX_LEGACY);
 }

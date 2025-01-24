@@ -2440,6 +2440,7 @@ __latent_entropy struct task_struct *copy_process(
 		cx_alloc_process_structs(p);
 		retval = cx_copy_process_data(p);
 		if (retval < 0) {
+            pr_info("failed cx fork\n");
 			exit_cx(p);
 			goto bad_fork_cleanup_delayacct;
 		}
