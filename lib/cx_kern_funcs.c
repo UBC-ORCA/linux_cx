@@ -578,10 +578,10 @@ int cx_close(struct task_struct *tsk, cx_select_t cx_sel) {
         free_state(tsk, cxu_id, state_id);
     }
 
-    if (owning_process_table[cxu_id][state_id].tsk == current) {
-        owning_process_table[cxu_id][state_id].tsk = NULL;
-        owning_process_table[cxu_id][state_id].v_id = -1;
-    }
+    // This only gets here if the state is totally free
+    owning_process_table[cxu_id][state_id].tsk = NULL;
+    owning_process_table[cxu_id][state_id].v_id = -1;
+
     return 0;
 }
 
