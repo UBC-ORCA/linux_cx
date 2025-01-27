@@ -166,10 +166,6 @@ static void free_vstates(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t
     }
 }
 
-// static void free_vstate(struct task_struct *tsk, cxu_id_t cxu_id, cx_state_id_t state_id, cx_vstate_id_t vstate) {
-//     tsk->cxu_data[cxu_id].state[state_id].v_id[vstate / VSTATE_WORDS] &= ~(1 << vstate);
-// }
-
 void cx_init(void)
 {
     cxu[0].cx_guid[0] = CX_GUID_ADDSUB;
@@ -334,6 +330,7 @@ static int save_ctx_to_process(struct task_struct *tsk, cxu_id_t cxu_id, cx_stat
     if (!vdata) {
         pr_info("couldn't find vdata\n");
     }
+    status.sel.dc = CX_CLEAN;
     vdata->status = status.idx;
     for (int i = 0; i < status.sel.state_size; i++) {
         vdata->data[i] = CX_READ_STATE(i);
@@ -361,7 +358,6 @@ void cx_context_save(struct task_struct *tsk) {
 }
 
 void cx_context_restore(struct task_struct *tsk) {
-    // TODO: We should be RESTORING here, not clearing. Clearing is for the hack (not setting enable)
     restore_cx_en_csrs(tsk);
     csr_write(CX_SELECTOR_USER, tsk->ucx_sel);
     csr_write(CX_STATUS, tsk->cx_status);
@@ -548,11 +544,11 @@ int cx_close(struct task_struct *tsk, cx_select_t cx_sel) {
 
     // Stateful CXs
     cx_state_id_t state_id = CX_GET_STATE_ID(cx_sel);
+    cx_vstate_id_t virt_id = CX_GET_VIRT_STATE_ID(cx_sel);
 
-    // Trapping when bit is set high (not enabled in the task)
-    // Not trapping when bit is low (enabled in task)
-    bool task_enable_bit = get_task_enable_bit(tsk, cxu_id, state_id);
-    if (!task_enable_bit) {
+    bool vstate_active = check_vstate_active(tsk, cxu_id, state_id, virt_id);
+    if (!vstate_active) {
+        pr_info("Closing a v_id that has not been opened\n");
         return 0;
     }
 
@@ -563,10 +559,15 @@ int cx_close(struct task_struct *tsk, cx_select_t cx_sel) {
         return 0;
     }
 
-    cx_vstate_id_t virt_id = CX_GET_VIRT_STATE_ID(cx_sel);
-
     // Free the virtual state id
     free_vstate(tsk, cxu_id, state_id, virt_id);
+
+    bool task_enable_bit = get_task_enable_bit(tsk, cxu_id, state_id);
+    if (task_enable_bit) {
+        owning_process_table[cxu_id][state_id].tsk = NULL;
+        owning_process_table[cxu_id][state_id].v_id = -1;
+    }
+
     if (!is_vstate_free(tsk, cxu_id, state_id)) {
         return 0;
     }
@@ -577,11 +578,7 @@ int cx_close(struct task_struct *tsk, cx_select_t cx_sel) {
     if (cxu[cxu_id].state_info[state_id].counter == 0) {
         free_state(tsk, cxu_id, state_id);
     }
-
-    // This only gets here if the state is totally free
-    owning_process_table[cxu_id][state_id].tsk = NULL;
-    owning_process_table[cxu_id][state_id].v_id = -1;
-
+    
     return 0;
 }
 
@@ -631,6 +628,9 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_virt, int, cx_virt_sel) {
     cx_idx_t sel = {.idx = -1};
     if (cx_virt == CX_NO_VIRT) {
         sel = try_alloc_state_exclusive(cxu_id, cx_virt);
+        if (sel.idx < 0) {
+            return -1;
+        }
     }
     else if (cx_virt == CX_INTRA_VIRT) {
         if (cx_virt_idx.idx == -1) {
@@ -837,16 +837,15 @@ void cx_first_use(void) {
         save_ctx_to_process(prev_task, prev_cxu_id, prev_state_id, owning_process_table[prev_cxu_id][prev_state_id].v_id);
     }
 
-    if (cxu[cxu_id].num_states != 0 &&
-        owning_process_table[cxu_id][state_id].tsk != NULL) {
+    if (cxu[cxu_id].num_states != 0) {
         clear_task_cx_permission(owning_process_table[cxu_id][state_id].tsk, cxu_id, state_id);
     }
 
     csr_write(CX_PREV_SELECTOR_USER, sel);
     csr_write(CX_SELECTOR_USER, sel);
 
-    set_task_cx_permission(current, cxu_id, state_id);
     set_mcx_enable(cxu_id, state_id);
+    set_task_cx_permission(current, cxu_id, state_id);
 
     if (cxu[cxu_id].num_states == 0) {
         return;
@@ -874,8 +873,8 @@ void exit_cx(struct task_struct *tsk) {
                 // 16 states per CXU
                 cxu_id_t      cxu_id = i * 2 + j / MAX_NUM_STATES;
                 uint vid_clear = is_vstate_free(tsk, cxu_id, state_id);
-                uint mcx_enable_bit = GET_BITS(mcx_enable, j, 1);
-                if (!vid_clear && mcx_enable_bit) {
+                // uint mcx_enable_bit = GET_BITS(mcx_enable, j, 1);
+                if (!vid_clear) {
                     pr_info("freeing state from exit_cx: %d, %d, %d\n", cxu_id, state_id, j);
 
                     free_all_v_states(tsk, cxu_id, state_id);
@@ -886,8 +885,10 @@ void exit_cx(struct task_struct *tsk) {
                         free_state(tsk, cxu_id, state_id);
                     }
 
-                    owning_process_table[cxu_id][state_id].tsk = NULL;
-                    owning_process_table[cxu_id][state_id].v_id = -1;
+                    if (mcx_enable) {
+                        owning_process_table[cxu_id][state_id].tsk = NULL;
+                        owning_process_table[cxu_id][state_id].v_id = -1;
+                    }
                 }
             }
         }
