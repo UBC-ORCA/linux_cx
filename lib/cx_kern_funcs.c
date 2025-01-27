@@ -14,6 +14,7 @@
 #include "../../zoo/addsub/addsub_common.h"
 #include "../../zoo/p-ext/p-ext_common.h"
 #include "../../zoo/vector/vector_common.h"
+#include "../../zoo/max/max_common.h"
 
 extern cxu_info_t cxu[NUM_CXUS];
 extern opt_entry_t owning_process_table[NUM_CXUS][MAX_NUM_STATES];
@@ -174,6 +175,7 @@ void cx_init(void)
     cxu[3].cx_guid[0] = CX_GUID_PEXT;
     cxu[4].cx_guid[0] = CX_GUID_VECTOR;
     cxu[5].cx_guid[0] = CX_GUID_VECTOR;
+    cxu[6].cx_guid[0] = CX_GUID_MAX;
 
     cxu[0].num_states = CX_ADDSUB_NUM_STATES;
     cxu[1].num_states = CX_MULDIV_NUM_STATES;
@@ -181,6 +183,7 @@ void cx_init(void)
     cxu[3].num_states = CX_PEXT_NUM_STATES;
     cxu[4].num_states = CX_VECTOR_NUM_STATES;
     cxu[5].num_states = CX_VECTOR_NUM_STATES;
+    cxu[6].num_states = CX_MAX_NUM_STATES;
 
     for (int i = 0; i < NUM_CXUS; i++) {
         INIT_LIST_HEAD(&cxu[i].free_states);
@@ -837,7 +840,8 @@ void cx_first_use(void) {
         save_ctx_to_process(prev_task, prev_cxu_id, prev_state_id, owning_process_table[prev_cxu_id][prev_state_id].v_id);
     }
 
-    if (cxu[cxu_id].num_states != 0) {
+    if (cxu[cxu_id].num_states != 0 &&
+        owning_process_table[cxu_id][state_id].tsk != NULL) {
         clear_task_cx_permission(owning_process_table[cxu_id][state_id].tsk, cxu_id, state_id);
     }
 
