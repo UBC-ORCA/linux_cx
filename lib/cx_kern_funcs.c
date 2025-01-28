@@ -250,6 +250,26 @@ static void clear_mcx_enable(cxu_id_t cxu_id, cx_state_id_t state_id) {
         mcx_enable &= ~(1 << mcx_enable_idx);
         cx_csr_write(MCX_ENABLE3, mcx_enable);
         break;
+    case 4:
+        mcx_enable = cx_csr_read(MCX_ENABLE4);
+        mcx_enable &= ~(1 << mcx_enable_idx);
+        cx_csr_write(MCX_ENABLE4, mcx_enable);
+        break;
+    case 5:
+        mcx_enable = cx_csr_read(MCX_ENABLE5);
+        mcx_enable &= ~(1 << mcx_enable_idx);
+        cx_csr_write(MCX_ENABLE5, mcx_enable);
+        break;
+    case 6:
+        mcx_enable = cx_csr_read(MCX_ENABLE6);
+        mcx_enable &= ~(1 << mcx_enable_idx);
+        cx_csr_write(MCX_ENABLE6, mcx_enable);
+        break;
+    case 7:
+        mcx_enable = cx_csr_read(MCX_ENABLE7);
+        mcx_enable &= ~(1 << mcx_enable_idx);
+        cx_csr_write(MCX_ENABLE7, mcx_enable);
+        break;
     default:
         pr_info("(kernel clear) Further CSRs not defined (4-7); I should do that eventually\n");
         break;
@@ -280,6 +300,26 @@ static void set_mcx_enable(cxu_id_t cxu_id, cx_state_id_t state_id) {
         mcx_enable = cx_csr_read(MCX_ENABLE3);
         mcx_enable |= (1 << mcx_enable_idx);
         cx_csr_write(MCX_ENABLE3, mcx_enable);
+        break;
+    case 4:
+        mcx_enable = cx_csr_read(MCX_ENABLE4);
+        mcx_enable |= (1 << mcx_enable_idx);
+        cx_csr_write(MCX_ENABLE4, mcx_enable);
+        break;
+    case 5:
+        mcx_enable = cx_csr_read(MCX_ENABLE5);
+        mcx_enable |= (1 << mcx_enable_idx);
+        cx_csr_write(MCX_ENABLE5, mcx_enable);
+        break;
+    case 6:
+        mcx_enable = cx_csr_read(MCX_ENABLE6);
+        mcx_enable |= (1 << mcx_enable_idx);
+        cx_csr_write(MCX_ENABLE6, mcx_enable);
+        break;
+    case 7:
+        mcx_enable = cx_csr_read(MCX_ENABLE7);
+        mcx_enable |= (1 << mcx_enable_idx);
+        cx_csr_write(MCX_ENABLE7, mcx_enable);
         break;
     default:
         pr_info("(kernel set) Further CSRs not defined (4-7); I should do that eventually\n");
@@ -320,8 +360,20 @@ static uint get_mcx_enable_bit(cxu_id_t cxu_id, cx_state_id_t state_id) {
     case 3:
         mcx_enable = GET_BITS(cx_csr_read(MCX_ENABLE3), mcx_enable_idx, 1);
         break;
+    case 4:
+        mcx_enable = GET_BITS(cx_csr_read(MCX_ENABLE4), mcx_enable_idx, 1);
+        break;
+    case 5:
+        mcx_enable = GET_BITS(cx_csr_read(MCX_ENABLE5), mcx_enable_idx, 1);
+        break;
+    case 6:
+        mcx_enable = GET_BITS(cx_csr_read(MCX_ENABLE6), mcx_enable_idx, 1);
+        break;
+    case 7:
+        mcx_enable = GET_BITS(cx_csr_read(MCX_ENABLE7), mcx_enable_idx, 1);
+        break;
     default:
-        pr_info("(kernel get) Further CSRs not defined (4-7); I should do that eventually\n");
+        pr_info("(kernel get) CSR not defined (8+)\n");
         break;
     }
     return mcx_enable;
