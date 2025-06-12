@@ -11,6 +11,9 @@
 #include "../../zoo/addsub/addsub_common.h"
 #include "../../zoo/p-ext/p-ext_common.h"
 #include "../../zoo/vector/vector_common.h"
+#include "../../zoo/max/max_common.h"
+#include "../../zoo/nn_acc/nn_acc_common.h"
+
 
 extern cx_entry_t cx_map[NUM_CX];
 extern opt_entry_t owning_proc_table[NUM_CX][MAX_STATE_ID];
@@ -53,7 +56,7 @@ int cx_init_process(struct task_struct *tsk) {
 int cx_init(void) {
 		
 	pr_info("Ran in part of main\n");
-		
+
 	// can't 0 initialize this because we might not have an mcx_table 
 	// allocated yet
 	// csr_write(CX_INDEX, 0);
@@ -70,6 +73,8 @@ int cx_init(void) {
     cx_map[3].cx_guid = CX_GUID_PEXT;
     cx_map[4].cx_guid = CX_GUID_VECTOR;
     cx_map[5].cx_guid = CX_GUID_VECTOR;
+    cx_map[6].cx_guid = CX_GUID_MAX;
+    cx_map[7].cx_guid = CX_GUID_NN_ACC;
 
     cx_map[0].num_states = CX_MULDIV_NUM_STATES;
     cx_map[1].num_states = CX_ADDSUB_NUM_STATES;
@@ -77,6 +82,8 @@ int cx_init(void) {
     cx_map[3].num_states = CX_PEXT_NUM_STATES;
     cx_map[4].num_states = CX_VECTOR_NUM_STATES;
     cx_map[5].num_states = CX_VECTOR_NUM_STATES;
+    cx_map[6].num_states = CX_MAX_NUM_STATES;
+    cx_map[7].num_states = CX_NN_ACC_NUM_STATES;
 
     int32_t num_states = -1;
 
@@ -109,14 +116,14 @@ int cx_init(void) {
             cx_map[i].avail_state_ids = make_queue(num_states);
         }
     }
-
     return 0;
 }
 
 void copy_state_to_os( uint state_size, uint index, struct task_struct *tsk ) 
-{		
+{
+    cx_os_state_t dest = tsk->cx_os_state_table[index];
     for (int i = 0; i < state_size; i++) {
-        tsk->cx_os_state_table[index].data[i] = CX_READ_STATE(i);
+        dest.data[i] = CX_READ_STATE(i);
     }
 }
 
@@ -402,7 +409,6 @@ int initialize_state(uint status)
     CX_WRITE_STATUS(stat.idx);
     return 0;
 }
-
 int cx_context_save(struct task_struct *tsk) {
     if (tsk->mcx_table == NULL) {
         pr_info("mcx table is null (save)\n");

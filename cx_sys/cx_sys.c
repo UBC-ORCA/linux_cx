@@ -8,12 +8,16 @@
 #include <linux/kern_funcs.h>
 
 #include <linux/list.h>
+#include <linux/timekeeping.h>
 
 #include "../../include/cx_kern_structs.h"
 #include "../../zoo/mulacc/mulacc_common.h"
 #include "../../zoo/muldiv/muldiv_common.h"
 #include "../../zoo/addsub/addsub_common.h"
 #include "../../zoo/p-ext/p-ext_common.h"
+
+#include <linux/perf_event.h>
+#include <asm/unistd.h>
 
 #define CX_SEL_TABLE_NUM_ENTRIES 1024
 
@@ -130,7 +134,6 @@ int first_use_exception()
 
 		BUG_ON(owning_task == NULL);
 		// mismatch between opt and the owning process' scx_table
-		// pr_info("idx: %d, sel: %08x, curr_sel: %08x, ot: %d, ct: %d\n", owning_idx, owning_task->mcx_table[owning_idx], temp, owning_task->pid, current->pid);
 		BUG_ON(GET_CX_CXE(owning_task->mcx_table[owning_idx]) == 1);
 
 		// Storing status word + setting to clean
@@ -235,7 +238,6 @@ static cx_selidx_t get_least_shared_state_inter(cx_selidx_t sys_sel, cx_guid_t c
 */
 SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 {
-    
 	if (!current->mcx_table) {
 		cx_process_alloc(current);
 		cx_init_process(current);
@@ -371,10 +373,6 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 
 	current->mcx_table[cx_index] = cx_sel;
 
-	// 1. Update os information
-	current->cx_os_state_table[cx_index].data =
-		kzalloc(MAX_STATE_SIZE, GFP_KERNEL);
-
 	// 2. Store the previous value in the cx_index csr
 	cx_sel_t prev_sel_index = cx_csr_read(CX_INDEX);
 
@@ -388,6 +386,11 @@ SYSCALL_DEFINE3(cx_open, int, cx_guid, int, cx_share, int, cx_share_sel)
 
 	// 4 + 5
 	uint status = CX_READ_STATUS();
+
+    // Update OS information
+	current->cx_os_state_table[cx_index].data =
+		kzalloc(sizeof(uint32_t) * GET_CX_STATE_SIZE(status), GFP_KERNEL);
+
 	int failure = initialize_state(status);
 	if (failure) {
 		pr_info("there was a failure all along!\n");
@@ -431,4 +434,10 @@ SYSCALL_DEFINE0(context_save)
 SYSCALL_DEFINE0(context_restore)
 {
 	return cx_context_restore(current);
+}
+
+SYSCALL_DEFINE0(test_syscall_brandon)
+{
+    // pr_info("pid: %d\n", current->pid);
+	return 0;
 }

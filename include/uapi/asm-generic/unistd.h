@@ -849,8 +849,8 @@ __SYSCALL(__NR_cx_close, sys_cx_close)
 __SYSCALL(__NR_context_save, sys_context_save)
 #define __NR_context_restore 466
 __SYSCALL(__NR_context_restore, sys_context_restore)
-#define __NR_do_nothing 467
-__SYSCALL(__NR_do_nothing, sys_do_nothing)
+#define __NR_test_syscall_brandon 467
+__SYSCALL(__NR_test_syscall_brandon, sys_test_syscall_brandon)
 
 #undef __NR_syscalls
 #define __NR_syscalls 468
